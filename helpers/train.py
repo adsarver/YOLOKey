@@ -8,6 +8,9 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import torchvision
+from torchmetrics.detection import MeanAveragePrecision
+import random
+from torchvision.utils import draw_bounding_boxes, save_image
 
 # Add parent directory to path to allow imports from models/
 import sys
@@ -40,7 +43,7 @@ def get_next_run_dir(base_dir='runs'):
 
 def plot_results(history, save_path):
     epochs = range(1, len(history['train_loss']) + 1)
-    fig, axs = plt.subplots(2, 3, figsize=(20, 10))
+    fig, axs = plt.subplots(2, 2, figsize=(15, 10)) # Adjusted for 4 plots
     fig.suptitle('Training and Validation Metrics')
 
     axs[0, 0].plot(epochs, history['train_loss'], 'bo-', label='Training Loss')
@@ -49,29 +52,17 @@ def plot_results(history, save_path):
     axs[0, 0].legend()
     axs[0, 0].grid(True)
 
-    axs[0, 1].plot(epochs, history['precision'], 'go-', label='Precision')
-    axs[0, 1].set_title('Precision')
+    axs[0, 1].plot(epochs, history['map_0.5'], 'mo-', label='mAP@.50')
+    axs[0, 1].set_title('mAP@.50')
     axs[0, 1].grid(True)
     
-    axs[0, 2].plot(epochs, history['recall'], 'yo-', label='Recall')
-    axs[0, 2].set_title('Recall')
-    axs[0, 2].grid(True)
-
-    axs[1, 0].plot(epochs, history['map_0.5'], 'mo-', label='mAP@0.5')
-    axs[1, 0].set_title('mAP@0.5')
+    axs[1, 0].plot(epochs, history['map_0.5:0.95'], 'co-', label='mAP@.50:.95')
+    axs[1, 0].set_title('mAP@.50-.95 (Primary Metric)')
     axs[1, 0].grid(True)
     
-    axs[1, 1].plot(epochs, history['map_0.5:0.95'], 'co-', label='mAP@.5:.95')
-    axs[1, 1].set_title('mAP@.5-.95')
+    axs[1, 1].plot(epochs, history['mar_100'], 'yo-', label='mAR@100')
+    axs[1, 1].set_title('Mean Average Recall @ 100 Detections')
     axs[1, 1].grid(True)
-    
-    axs[1, 2].plot(epochs, history['f1'], 'ko-', label='F1 Score')
-    axs[1, 2].set_title('F1 Score')
-    axs[1, 2].grid(True)
-    
-    axs[2, 1].plot(epochs, history['batch_iou'], 'ro-', label='Avg Max IoU')
-    axs[2, 1].set_title('Avg Max IoU')
-    axs[2, 1].grid(True)
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(save_path)
@@ -79,6 +70,7 @@ def plot_results(history, save_path):
     print(f"Results plot saved to {save_path}")
     
 def xywh2xyxy(x):
+    """Converts bounding box format from [center_x, center_y, width, height] to [x1, y1, x2, y2]."""
     y = x.clone()
     y[:, 0] = x[:, 0] - x[:, 2] / 2
     y[:, 1] = x[:, 1] - x[:, 3] / 2
@@ -86,101 +78,70 @@ def xywh2xyxy(x):
     y[:, 3] = x[:, 1] + x[:, 3] / 2
     return y
 
-def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, max_det=300):
-    """Performs Non-Maximum Suppression (NMS) on inference results."""
-    bs = prediction.shape[0]
-    output = [torch.zeros((0, 6), device=prediction.device)] * bs
+def log_random_image_predictions(model, val_loader, device, run_dir, epoch, class_names):
+    """Logs a random image with its ground truth and predicted bounding boxes."""
+    model.eval()
     
-    for xi, x in enumerate(prediction):
-        # Calculate the final confidence score
-        x[:, 5:] *= x[:, 4:5] # conf = obj_conf * cls_conf
+    # Get a single batch from the validation loader for visualization
+    try:
+        images, targets = next(iter(val_loader))
+    except StopIteration:
+        print("Validation loader is empty, cannot log image.")
+        return
         
-        # Get boxes and scores
-        box = xywh2xyxy(x[:, :4])
-        conf, j = x[:, 5:].max(1, keepdim=True)
-        
-        # Filter based on final confidence
-        x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
-        
-        if not x.shape[0]:
-            continue
+    images = images.to(device)
+    
+    with torch.no_grad():
+        inference_preds, _ = model(images)
 
-        # Perform NMS
-        boxes, scores = x[:, :4], x[:, 4]
-        i = torchvision.ops.nms(boxes, scores, iou_thres)
-        if i.shape[0] > max_det:
-            i = i[:max_det]
-        output[xi] = x[i]
+    # Select a random image from the batch
+    img_idx = random.randint(0, images.shape[0] - 1)
+    img_tensor = images[img_idx]
 
-    return output
+    # Convert image tensor to uint8 for drawing
+    img_to_draw = (img_tensor * 255).to(torch.uint8)
+    img_h, img_w = img_tensor.shape[1:]
 
-def ap_per_class(tp, conf, pred_cls, target_cls):
-    """ Compute the average precision, given the recall and precision curves. """
-    i = np.argsort(-conf)
-    tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
+    # --- Get and Format Ground Truth Boxes (Green) ---
+    gt_targets = targets[targets[:, 0] == img_idx, 1:]
+    gt_boxes = gt_targets[:, 1:]
+    # Denormalize
+    gt_boxes_denorm = gt_boxes.clone()
+    gt_boxes_denorm[:, 0] *= img_w
+    gt_boxes_denorm[:, 1] *= img_h
+    gt_boxes_denorm[:, 2] *= img_w
+    gt_boxes_denorm[:, 3] *= img_h
+    gt_boxes_xyxy = xywh2xyxy(gt_boxes_denorm)
+    gt_labels = [class_names[int(c)] for c in gt_targets[:, 0]]
 
-    unique_classes = np.unique(target_cls)
-    ap, p, r = np.zeros((len(unique_classes), tp.shape[1])), np.zeros((len(unique_classes), 1000)), np.zeros((len(unique_classes), 1000))
+    # --- Get and Format Predicted Boxes (Blue) ---
+    preds_for_img = inference_preds[img_idx]
+    preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
+    
+    vis_conf_thres = 0.25 
+    conf, labels_idx = preds_for_img[:, 5:].max(1)
+    
+    keep_indices = conf > vis_conf_thres
+    
+    pred_boxes = preds_for_img[keep_indices, :4]
+    pred_boxes_xyxy = xywh2xyxy(pred_boxes)
+    pred_scores = conf[keep_indices]
+    pred_labels_idx = labels_idx[keep_indices]
+    
+    pred_labels = [f"{class_names[int(l)]} {s:.2f}" for l, s in zip(pred_labels_idx, pred_scores)]
 
-    for ci, c in enumerate(unique_classes):
-        i = pred_cls == c
-        n_l = (target_cls == c).sum()
-        n_p = i.sum()
+    # Draw boxes on the image
+    # Draw GT first, then predictions on the result
+    if gt_boxes_xyxy.shape[0] > 0:
+        img_to_draw = draw_bounding_boxes(img_to_draw.cpu(), boxes=gt_boxes_xyxy, labels=gt_labels, colors="green", width=2)
+    if pred_boxes_xyxy.shape[0] > 0:
+        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes_xyxy, labels=pred_labels, colors="blue", width=2)
 
-        if n_p == 0 or n_l == 0:
-            continue
-        
-        fpc = (1 - tp[i]).cumsum(0)
-        tpc = tp[i].cumsum(0)
-
-        recall_curve = tpc / (n_l + 1e-16)
-        r[ci] = np.interp(-conf[i], -conf[i], recall_curve, left=0)
-
-        precision_curve = tpc / (tpc + fpc)
-        p[ci] = np.interp(-conf[i], -conf[i], precision_curve, left=1)
-
-        for j in range(tp.shape[1]):
-            ap[ci, j], mpre, mrec = compute_ap(r[ci], p[ci])
-
-    f1 = 2 * p * r / (p + r + 1e-16)
-    return p, r, ap, f1, unique_classes.astype('int32')
-
-def compute_ap(recall, precision):
-    """ Compute the average precision from the recall and precision curves. """
-    mrec = np.concatenate(([0.], recall, [1.]))
-    mpre = np.concatenate(([0.], precision, [0.]))
-
-    for i in range(mpre.size - 1, 0, -1):
-        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
-
-    i = np.where(mrec[1:] != mrec[:-1])[0]
-    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
-    return ap, mpre, mrec
-
-def process_batch(detections, labels, iouv):
-    """
-    Return correct predictions matrix.
-    Arguments:
-        detections (Array[N, 6]), x1, y1, x2, y2, conf, class
-        labels (Array[M, 5]), class, x1, y1, x2, y2
-    Returns:
-        correct (Array[N, 10]), for 10 IoU levels
-    """
-    correct = torch.zeros(detections.shape[0], iouv.shape[0], dtype=torch.bool, device=iouv.device)
-    iou = torchvision.ops.box_iou(labels[:, 1:], detections[:, :4])
-    x = torch.where((iou >= iouv[0]) & (labels[:, 0:1] == detections[:, 5]))
-    if x[0].shape[0]:
-        matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()
-        if x[0].shape[0] > 1:
-            matches = matches[matches[:, 2].argsort()[::-1]]
-            matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
-            matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
-        matches = torch.from_numpy(matches).to(iouv.device)
-        correct[matches[:, 1].long()] = matches[:, 2:3] >= iouv
-    return correct
-
+    # Save the image
+    save_path = os.path.join(run_dir, f"epoch_{epoch+1}_predictions.jpg")
+    save_image(img_to_draw / 255.0, save_path)
+    
 # --- Loss and Metrics Calculation ---
-
 class ComputeLoss:
     def __init__(self, model):
         self.device = next(model.parameters()).device
@@ -324,16 +285,16 @@ def train(config):
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
     compute_loss = ComputeLoss(model)
     
+    # --- TorchMetrics ---
+    metric = MeanAveragePrecision(box_format='xywh', backend="faster_coco_eval").to(device)
+    
     # Training history
     history = {
         'train_loss': [], 
         'val_loss': [], 
-        'f1': [],
-        'precision': [], 
-        'recall': [], 
         'map_0.5': [],
         'map_0.5:0.95': [],
-        'batch_iou': [],
+        'mar_100': []
     }
     best_val_loss = float('inf')
 
@@ -366,73 +327,72 @@ def train(config):
         
         # Validation Loop
         model.eval()
-        stats = []
-        iouv = torch.linspace(0.5, 0.95, 10).to(device)
         val_loss = 0
 
         pbar_val = tqdm(val_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Validation]")
         with torch.no_grad():
-            batch_max_ious = []
             for images, targets in pbar_val:
                 images = images.to(device)
                 targets = targets.to(device)
-                targets[:, 2:] *= torch.Tensor([images.shape[3], images.shape[2], images.shape[3], images.shape[2]]).to(device)
                 
                 inference_preds, train_preds = model(images)
                 loss, _ = compute_loss(train_preds, targets)
                 val_loss += loss.item()
-
-                inference_preds = non_max_suppression(inference_preds, conf_thres=0.001, iou_thres=0.6)
                 
-                for i, pred in enumerate(inference_preds):
-                    labels = targets[targets[:, 0] == i, 1:]
-                    nl = len(labels)
-                    tcls = labels[:, 0].tolist() if nl else []
+                # Format for TorchMetrics
+                preds_for_metric = []
+                for pred in inference_preds:
+                    pred[:, 5:] *= pred[:, 4:5]  # conf = obj_conf * cls_conf
+                    conf, _ = pred[:, 5:].max(1)
                     
-                    if len(pred) > 0 and nl > 0:
-                        ious = torchvision.ops.box_iou(xywh2xyxy(labels[:, 1:]), pred[:, :4])
-                        if ious.numel() > 0:
-                            batch_max_ious.append(ious.max().item())
-                            
-                    if len(pred) == 0:
-                        if nl:
-                            stats.append((torch.zeros(0, iouv.shape[0], dtype=torch.bool), torch.zeros(0), torch.zeros(0), torch.tensor(tcls)))
-                        continue
                     
-                    labels_xyxy = labels.clone()
-                    labels_xyxy[:, 1:] = xywh2xyxy(labels[:, 1:])
+                    if pred.shape[0] > 100:
+                        # Get the indices of the top K predictions by confidence
+                        topk_indices = conf.topk(100, largest=True).indices
+                        pred = pred[topk_indices]
+                        
+                    conf, labels = pred[:, 5:].max(1)
                     
-                    correct = process_batch(pred, labels_xyxy, iouv)
-                    stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), torch.tensor(tcls)))
-                    avg_max_iou = np.mean(batch_max_ious) if batch_max_ious else 0.0
-                    pbar_val.set_postfix({
-                        'loss': f'{loss.item():.4f}', 
-                        'avg_max_iou': f'{avg_max_iou:.3f}', 
-                        'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
-                    })
-        
+                    preds_for_metric.append(dict(
+                        boxes=pred[:, :4],
+                        scores=conf,
+                        labels=labels.int()
+                    ))
+                    
+                targets_for_metric = []
+                # Un-normalize and format ground truth
+                scaled_targets = targets.clone()
+                scaled_targets[:, 2:] *= torch.tensor([images.shape[3], images.shape[2], images.shape[3], images.shape[2]], device=device)
+                for i in range(images.shape[0]):
+                    labels = scaled_targets[scaled_targets[:, 0] == i, 1:]
+                    targets_for_metric.append(dict(
+                        boxes=labels[:, 1:],
+                        labels=labels[:, 0].int()
+                    ))
+                                
+                metric.update(preds_for_metric, targets_for_metric)
+
         avg_val_loss = val_loss / len(val_loader)
         
-        stats = [np.concatenate(x, 0) for x in zip(*stats)]
-        
-        if len(stats) and stats[0].any():
-            p, r, ap, f1, _ = ap_per_class(*stats)
-            ap50, ap = ap[:, 0], ap.mean(1)
-            mp, mr, map50, map95, f1 = p.mean(), r.mean(), ap50.mean(), ap, f1.mean()
-        else:
-            mp, mr, map50, map95, f1 = 0., 0., 0., 0., 0.
+        # Compute and log metrics
+        results = metric.compute()
+        # metric.reset()
 
-        print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, P: {mp:.4f}, R: {mr:.4f}, mAP@.5: {map50:.4f}, mAP@.5-.95: {map95:.4f}, F1: {f1:.4f}")
+        map50 = results['map_50'].item()
+        map95 = results['map'].item()
+        mar100 = results['mar_100'].item()
+
+        print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, mAP@.50: {map50:.4f}, mAP@.50-.95: {map95:.4f}, mAR@100: {mar100:.4f}")
 
         # Update history
         history['train_loss'].append(avg_train_loss)
         history['val_loss'].append(avg_val_loss)
-        history['f1'].append(f1)
-        history['precision'].append(mp)
-        history['recall'].append(mr)
         history['map_0.5'].append(map50)
         history['map_0.5:0.95'].append(map95)
-        history['batch_iou'].append(np.mean(batch_max_ious) if batch_max_ious else 0.0)
+        history['mar_100'].append(mar100)
+        
+        # Log random image predictions
+        log_random_image_predictions(model, val_loader, device, run_dir, epoch, data_config['names'])
 
         # Save checkpoints
         last_ckpt_path = os.path.join(run_dir, 'last.pt')
@@ -449,10 +409,10 @@ def train(config):
 
 if __name__ == '__main__':
     config = {
-        'data_yaml': 'datase128/data.yaml',
+        'data_yaml': 'dataset128/data.yaml',
         'img_size': 128,
-        'batch_size': 16,
-        'epochs': 50,
+        'batch_size': 128,
+        'epochs': 10,
         'learning_rate': 0.001
     }
     train(config)
