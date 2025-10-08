@@ -17,7 +17,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from models.YOLOBase import YOLOBase
-from helpers.data import YoloDataset, yolo_collate_fn
+from helpers.data import YOLODataset
 
 # --- Utility Functions ---
 
@@ -142,113 +142,33 @@ def log_random_image_predictions(model, val_loader, device, run_dir, epoch, clas
     save_image(img_to_draw / 255.0, save_path)
     
 # --- Loss and Metrics Calculation ---
-class ComputeLoss:
-    def __init__(self, model):
-        self.device = next(model.parameters()).device
-        self.hyp = {'box': 0.05, 'cls': 0.5, 'obj': 1.0}
-        self.bce_cls = torch.nn.BCEWithLogitsLoss()
-        self.bce_obj = torch.nn.BCEWithLogitsLoss()
-        self.model = model
+def ComputeLoss(predictions, targets, num_classes, lambda_coord=5, lambda_noobj=0.5):
+    """
+    Computes YOLO loss.
+    - predictions: Predicted tensor.
+    - targets: Ground truth tensor.
+    """
+    # Unpack predictions and targets
+    pred_boxes = predictions[..., :4]
+    pred_conf = predictions[..., 4]
+    pred_classes = predictions[..., 5:]
+    target_boxes = targets[..., :4]
+    target_conf = targets[..., 4]
+    target_classes = targets[..., 5:]
+    
+    # Localization Loss
+    box_loss = lambda_coord * torch.sum((pred_boxes - target_boxes) ** 2)
 
-    def __call__(self, preds, targets):
-        lcls, lbox, lobj = torch.zeros(1, device=self.device), torch.zeros(1, device=self.device), torch.zeros(1, device=self.device)
-        tcls, tbox, indices, anchors = self.build_targets(preds, targets)
+    # Confidence Loss
+    obj_loss = torch.sum((pred_conf - target_conf) ** 2)
+    noobj_loss = lambda_noobj * torch.sum((pred_conf[target_conf == 0]) ** 2)
 
-        for i, pred_layer in enumerate(preds):
-            b, a, gj, gi = indices[i]
-            tobj = torch.zeros_like(pred_layer[..., 0], device=self.device)
+    # Classification Loss
+    class_loss = torch.sum((pred_classes - target_classes) ** 2)
 
-            n = b.shape[0]
-            if n:
-                ps = pred_layer[b, a, gj, gi]
-                
-                pxy = ps[:, :2].sigmoid() * 2 - 0.5
-                pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
-                pbox = torch.cat((pxy, pwh), 1)
-                iou = self.bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, CIoU=True)
-                lbox += (1.0 - iou).mean()
-
-                tobj[b, a, gj, gi] = iou.detach().clamp(0).type(tobj.dtype)
-
-                if self.model.nc > 1:
-                    t = torch.full_like(ps[:, 5:], 0, device=self.device)
-                    t[range(n), tcls[i]] = 1
-                    lcls += self.bce_cls(ps[:, 5:], t)
-            
-            lobj += self.bce_obj(pred_layer[..., 4], tobj)
-
-        lbox *= self.hyp['box']
-        lobj *= self.hyp['obj']
-        lcls *= self.hyp['cls']
-
-        return lbox + lobj + lcls, torch.cat((lbox, lobj, lcls)).detach()
-
-    def build_targets(self, preds, targets):
-        na, nt = self.model.head.na, targets.shape[0]
-        tcls, tbox, indices, anch = [], [], [], []
-        gain = torch.ones(7, device=self.device)
-        ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)
-        
-        for i in range(self.model.head.nl):
-            anchors = self.model.head.anchors[i]
-            gain[2:6] = torch.tensor(preds[i].shape)[[3, 2, 3, 2]]
-            t = targets * gain
-            if nt:
-                r = t[:, :, 4:6] / anchors[:, None]
-                j = torch.max(r, 1. / r).max(2)[0] < 4.0
-                t = t[j]
-            else:
-                t = targets[0]
-            
-            b, c = t[:, :2].long().T
-            gxy = t[:, 2:4]
-            gwh = t[:, 4:6]
-            gij = gxy.long()
-            gi, gj = gij.T
-            
-            a = t[:, 6].long()
-            indices.append((b, a, gj.clamp_(0, int(gain[3].item()) - 1), gi.clamp_(0, int(gain[2].item()) - 1)))
-            tbox.append(torch.cat((gxy - gij, gwh), 1))
-            anch.append(anchors[a])
-            tcls.append(c)
-        
-        return tcls, tbox, indices, anch
-
-    def bbox_iou(self, box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
-        # Returns the IoU of box1 to box2. box1 is 4xn, box2 is nx4
-        box2 = box2.T
-
-        # Get the coordinates of bounding boxes
-        if x1y1x2y2:  # x1, y1, x2, y2 = box1
-            b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
-            b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
-        else:  # transform from xywh to xyxy
-            b1_x1, b1_x2 = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
-            b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
-            b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
-            b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
-
-        inter_rect_x1 = torch.max(b1_x1, b2_x1)
-        inter_rect_y1 = torch.max(b1_y1, b2_y1)
-        inter_rect_x2 = torch.min(b1_x2, b2_x2)
-        inter_rect_y2 = torch.min(b1_y2, b2_y2)
-        inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, min=0) * \
-                     torch.clamp(inter_rect_y2 - inter_rect_y1, min=0)
-        b1_area = (b1_x2 - b1_x1) * (b1_y2 - b1_y1)
-        b2_area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)
-        iou = inter_area / (b1_area + b2_area - inter_area + 1e-16)
-
-        if CIoU:
-            cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)
-            ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)
-            c2 = cw ** 2 + ch ** 2 + eps
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4
-            v = (4 / math.pi ** 2) * torch.pow(torch.atan((b2_x2 - b2_x1) / (b2_y2 - b2_y1)) - torch.atan((b1_x2 - b1_x1) / (b1_y2 - b1_y1)), 2)
-            with torch.no_grad():
-                alpha = v / (v - iou + (1.0 + eps))
-            return iou - (rho2 / c2 + v * alpha)
-        return iou
+    # Total Loss
+    total_loss = box_loss + obj_loss + noobj_loss + class_loss
+    return total_loss
 
 # --- Main Training Function ---
 def train(config):
@@ -266,24 +186,36 @@ def train(config):
     
     with open(data_yaml_path, 'r') as f:
         data_config = yaml.safe_load(f)
+        
+    nc = len(data_config['names'])
+    
+    # -- Transforms ---
+    mean = (0.4914, 0.4822, 0.4465)
+    std  = (0.2470, 0.2435, 0.2616)
+    transforms = torchvision.transforms.Compose([
+        torchvision.transforms.ToPILImage(),
+        torchvision.transforms.Resize((img_size, img_size)),
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Normalize(mean, std)
+    ])
 
     # --- DataLoaders ---
     train_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['train'])
     train_img_dir = train_img_dir.replace('../', '')
     train_label_dir = train_img_dir.replace('images', 'labels')
-    train_dataset = YoloDataset(img_dir=train_img_dir, label_dir=train_label_dir, img_size=img_size)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=yolo_collate_fn, num_workers=4)
+    train_dataset = YOLODataset(img_dir=train_img_dir, label_dir=train_label_dir, transforms=transforms)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     val_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['val'])
     val_img_dir = val_img_dir.replace('../', '')
     val_label_dir = val_img_dir.replace('images', 'labels')
-    val_dataset = YoloDataset(img_dir=val_img_dir, label_dir=val_label_dir, img_size=img_size)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=yolo_collate_fn, num_workers=4)
+    val_dataset = YOLODataset(img_dir=val_img_dir, label_dir=val_label_dir, transforms=transforms)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 
     # Model
-    model = YOLOBase(nc=len(data_config['names'])).to(device)
+    model = YOLOBase(num_classes=nc, num_anchors=3).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
-    compute_loss = ComputeLoss(model)
+    compute_loss = ComputeLoss
     
     # --- TorchMetrics ---
     metric = MeanAveragePrecision(box_format='xywh', backend="faster_coco_eval").to(device)
@@ -303,13 +235,16 @@ def train(config):
         model.train()
         train_loss = 0
         pbar_train = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Training]")
+        
         for images, targets in pbar_train:
             images = images.to(device)
             targets = targets.to(device)
             
-            optimizer.zero_grad()
             preds = model(images)
-            loss, components = compute_loss(preds, targets)
+            loss, components = compute_loss(preds, targets, num_classes=nc)
+            
+            # Back propagation
+            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
