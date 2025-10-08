@@ -449,8 +449,8 @@ def train(config):
 
 if __name__ == '__main__':
     config = {
-        'data_yaml': 'dataset/data.yaml',
-        'img_size': 640,
+        'data_yaml': 'datase128/data.yaml',
+        'img_size': 128,
         'batch_size': 16,
         'epochs': 50,
         'learning_rate': 0.001
