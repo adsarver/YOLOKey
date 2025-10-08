@@ -64,6 +64,7 @@ class YOLOBase(nn.Module):
 
         # --- Detection Head ---
         self.head = Detect(nc, anchors=anchors, ch=(128, 256, 256))
+        self.head.stride = torch.tensor([8., 16., 32.])
 
     def forward(self, x):
         # Backbone

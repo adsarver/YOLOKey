@@ -39,65 +39,149 @@ def get_next_run_dir(base_dir='runs'):
     return run_dir
 
 def plot_results(history, save_path):
-    """Plots training and validation metrics and saves the figure."""
     epochs = range(1, len(history['train_loss']) + 1)
-    
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axs = plt.subplots(2, 3, figsize=(20, 10))
     fig.suptitle('Training and Validation Metrics')
 
     axs[0, 0].plot(epochs, history['train_loss'], 'bo-', label='Training Loss')
     axs[0, 0].plot(epochs, history['val_loss'], 'ro-', label='Validation Loss')
-    axs[0, 0].set_title('Loss over Epochs')
-    axs[0, 0].set_xlabel('Epochs')
-    axs[0, 0].set_ylabel('Loss')
+    axs[0, 0].set_title('Loss')
     axs[0, 0].legend()
     axs[0, 0].grid(True)
 
     axs[0, 1].plot(epochs, history['precision'], 'go-', label='Precision')
-    axs[0, 1].set_title('Precision over Epochs')
-    axs[0, 1].set_xlabel('Epochs')
-    axs[0, 1].set_ylabel('Precision')
+    axs[0, 1].set_title('Precision')
     axs[0, 1].grid(True)
     
-    axs[1, 0].plot(epochs, history['recall'], 'yo-', label='Recall')
-    axs[1, 0].set_title('Recall over Epochs')
-    axs[1, 0].set_xlabel('Epochs')
-    axs[1, 0].set_ylabel('Recall')
-    axs[1, 0].grid(True)
+    axs[0, 2].plot(epochs, history['recall'], 'yo-', label='Recall')
+    axs[0, 2].set_title('Recall')
+    axs[0, 2].grid(True)
 
-    axs[1, 1].plot(epochs, history['map_0.5'], 'mo-', label='mAP@0.5')
-    axs[1, 1].set_title('mAP@0.5 over Epochs')
-    axs[1, 1].set_xlabel('Epochs')
-    axs[1, 1].set_ylabel('mAP@0.5')
+    axs[1, 0].plot(epochs, history['map_0.5'], 'mo-', label='mAP@0.5')
+    axs[1, 0].set_title('mAP@0.5')
+    axs[1, 0].grid(True)
+    
+    axs[1, 1].plot(epochs, history['map_0.5:0.95'], 'co-', label='mAP@.5:.95')
+    axs[1, 1].set_title('mAP@.5-.95')
     axs[1, 1].grid(True)
+    
+    axs[1, 2].plot(epochs, history['f1'], 'ko-', label='F1 Score')
+    axs[1, 2].set_title('F1 Score')
+    axs[1, 2].grid(True)
+    
+    axs[2, 1].plot(epochs, history['batch_iou'], 'ro-', label='Avg Max IoU')
+    axs[2, 1].set_title('Avg Max IoU')
+    axs[2, 1].grid(True)
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(save_path)
     plt.close()
     print(f"Results plot saved to {save_path}")
+    
+def xywh2xyxy(x):
+    y = x.clone()
+    y[:, 0] = x[:, 0] - x[:, 2] / 2
+    y[:, 1] = x[:, 1] - x[:, 3] / 2
+    y[:, 2] = x[:, 0] + x[:, 2] / 2
+    y[:, 3] = x[:, 1] + x[:, 3] / 2
+    return y
 
 def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, max_det=300):
-    """Runs Non-Maximum Suppression (NMS) on inference results."""
-    # ... (Implementation of NMS, can be complex)
-    # For simplicity, we can use torchvision's NMS if available, otherwise a basic implementation is needed.
-    # This is a placeholder for a complete NMS implementation.
-    # A full implementation would be several dozen lines of code.
-    # In a real scenario, you'd use a library implementation or write one carefully.
+    """Performs Non-Maximum Suppression (NMS) on inference results."""
+    bs = prediction.shape[0]
+    output = [torch.zeros((0, 6), device=prediction.device)] * bs
     
-    # This is a simplified stand-in for NMS logic.
-    output = [torch.zeros((0, 6), device=prediction.device)] * prediction.shape[0]
-    for i, x in enumerate(prediction):
-        # This is not real NMS, just filtering by confidence
-        x = x[x[:, 4] > conf_thres]
-        if x.shape[0] > max_det:
-            x = x[:max_det]
-        output[i] = x
+    for xi, x in enumerate(prediction):
+        # Calculate the final confidence score
+        x[:, 5:] *= x[:, 4:5] # conf = obj_conf * cls_conf
+        
+        # Get boxes and scores
+        box = xywh2xyxy(x[:, :4])
+        conf, j = x[:, 5:].max(1, keepdim=True)
+        
+        # Filter based on final confidence
+        x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
+        
+        if not x.shape[0]:
+            continue
+
+        # Perform NMS
+        boxes, scores = x[:, :4], x[:, 4]
+        i = torchvision.ops.nms(boxes, scores, iou_thres)
+        if i.shape[0] > max_det:
+            i = i[:max_det]
+        output[xi] = x[i]
+
     return output
+
+def ap_per_class(tp, conf, pred_cls, target_cls):
+    """ Compute the average precision, given the recall and precision curves. """
+    i = np.argsort(-conf)
+    tp, conf, pred_cls = tp[i], conf[i], pred_cls[i]
+
+    unique_classes = np.unique(target_cls)
+    ap, p, r = np.zeros((len(unique_classes), tp.shape[1])), np.zeros((len(unique_classes), 1000)), np.zeros((len(unique_classes), 1000))
+
+    for ci, c in enumerate(unique_classes):
+        i = pred_cls == c
+        n_l = (target_cls == c).sum()
+        n_p = i.sum()
+
+        if n_p == 0 or n_l == 0:
+            continue
+        
+        fpc = (1 - tp[i]).cumsum(0)
+        tpc = tp[i].cumsum(0)
+
+        recall_curve = tpc / (n_l + 1e-16)
+        r[ci] = np.interp(-conf[i], -conf[i], recall_curve, left=0)
+
+        precision_curve = tpc / (tpc + fpc)
+        p[ci] = np.interp(-conf[i], -conf[i], precision_curve, left=1)
+
+        for j in range(tp.shape[1]):
+            ap[ci, j], mpre, mrec = compute_ap(r[ci], p[ci])
+
+    f1 = 2 * p * r / (p + r + 1e-16)
+    return p, r, ap, f1, unique_classes.astype('int32')
+
+def compute_ap(recall, precision):
+    """ Compute the average precision from the recall and precision curves. """
+    mrec = np.concatenate(([0.], recall, [1.]))
+    mpre = np.concatenate(([0.], precision, [0.]))
+
+    for i in range(mpre.size - 1, 0, -1):
+        mpre[i - 1] = np.maximum(mpre[i - 1], mpre[i])
+
+    i = np.where(mrec[1:] != mrec[:-1])[0]
+    ap = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
+    return ap, mpre, mrec
+
+def process_batch(detections, labels, iouv):
+    """
+    Return correct predictions matrix.
+    Arguments:
+        detections (Array[N, 6]), x1, y1, x2, y2, conf, class
+        labels (Array[M, 5]), class, x1, y1, x2, y2
+    Returns:
+        correct (Array[N, 10]), for 10 IoU levels
+    """
+    correct = torch.zeros(detections.shape[0], iouv.shape[0], dtype=torch.bool, device=iouv.device)
+    iou = torchvision.ops.box_iou(labels[:, 1:], detections[:, :4])
+    x = torch.where((iou >= iouv[0]) & (labels[:, 0:1] == detections[:, 5]))
+    if x[0].shape[0]:
+        matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()
+        if x[0].shape[0] > 1:
+            matches = matches[matches[:, 2].argsort()[::-1]]
+            matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
+            matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
+        matches = torch.from_numpy(matches).to(iouv.device)
+        correct[matches[:, 1].long()] = matches[:, 2:3] >= iouv
+    return correct
 
 # --- Loss and Metrics Calculation ---
 
 class ComputeLoss:
-    # ... (Implementation is the same as before, no changes needed)
     def __init__(self, model):
         self.device = next(model.parameters()).device
         self.hyp = {'box': 0.05, 'cls': 0.5, 'obj': 1.0}
@@ -204,8 +288,8 @@ class ComputeLoss:
                 alpha = v / (v - iou + (1.0 + eps))
             return iou - (rho2 / c2 + v * alpha)
         return iou
-# --- Main Training Function ---
 
+# --- Main Training Function ---
 def train(config):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -241,7 +325,16 @@ def train(config):
     compute_loss = ComputeLoss(model)
     
     # Training history
-    history = {'train_loss': [], 'val_loss': [], 'precision': [], 'recall': [], 'map_0.5': []}
+    history = {
+        'train_loss': [], 
+        'val_loss': [], 
+        'f1': [],
+        'precision': [], 
+        'recall': [], 
+        'map_0.5': [],
+        'map_0.5:0.95': [],
+        'batch_iou': [],
+    }
     best_val_loss = float('inf')
 
     # Training Loop
@@ -255,40 +348,91 @@ def train(config):
             
             optimizer.zero_grad()
             preds = model(images)
-            loss, _ = compute_loss(preds, targets)
+            loss, components = compute_loss(preds, targets)
             loss.backward()
             optimizer.step()
             
             train_loss += loss.item()
-            pbar_train.set_postfix({'loss': loss.item()})
+            
+            pbar_train.set_postfix({
+            'Loss': f"{loss.item():.4f}",
+            'Box': f"{components[0]:.4f}",
+            'Obj': f"{components[1]:.4f}",
+            'Cls': f"{components[2]:.4f}",
+            'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
+        })
         
         avg_train_loss = train_loss / len(train_loader)
         
         # Validation Loop
         model.eval()
+        stats = []
+        iouv = torch.linspace(0.5, 0.95, 10).to(device)
         val_loss = 0
-        # Placeholder for metrics, in a real scenario you would compute them
-        val_precision, val_recall, val_map = 0.1 * (epoch+1), 0.15 * (epoch+1), 0.2 * (epoch+1) # Dummy values
 
         pbar_val = tqdm(val_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Validation]")
         with torch.no_grad():
+            batch_max_ious = []
             for images, targets in pbar_val:
                 images = images.to(device)
                 targets = targets.to(device)
-                preds = model(images)
-                loss, _ = compute_loss(preds, targets)
+                targets[:, 2:] *= torch.Tensor([images.shape[3], images.shape[2], images.shape[3], images.shape[2]]).to(device)
+                
+                inference_preds, train_preds = model(images)
+                loss, _ = compute_loss(train_preds, targets)
                 val_loss += loss.item()
-                # Here you would add logic to calculate Precision, Recall, mAP
+
+                inference_preds = non_max_suppression(inference_preds, conf_thres=0.001, iou_thres=0.6)
+                
+                for i, pred in enumerate(inference_preds):
+                    labels = targets[targets[:, 0] == i, 1:]
+                    nl = len(labels)
+                    tcls = labels[:, 0].tolist() if nl else []
+                    
+                    if len(pred) > 0 and nl > 0:
+                        ious = torchvision.ops.box_iou(xywh2xyxy(labels[:, 1:]), pred[:, :4])
+                        if ious.numel() > 0:
+                            batch_max_ious.append(ious.max().item())
+                            
+                    if len(pred) == 0:
+                        if nl:
+                            stats.append((torch.zeros(0, iouv.shape[0], dtype=torch.bool), torch.zeros(0), torch.zeros(0), torch.tensor(tcls)))
+                        continue
+                    
+                    labels_xyxy = labels.clone()
+                    labels_xyxy[:, 1:] = xywh2xyxy(labels[:, 1:])
+                    
+                    correct = process_batch(pred, labels_xyxy, iouv)
+                    stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), torch.tensor(tcls)))
+                    avg_max_iou = np.mean(batch_max_ious) if batch_max_ious else 0.0
+                    pbar_val.set_postfix({
+                        'loss': f'{loss.item():.4f}', 
+                        'avg_max_iou': f'{avg_max_iou:.3f}', 
+                        'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
+                    })
         
         avg_val_loss = val_loss / len(val_loader)
-        print(f"Epoch {epoch+1}: \n\tTrain Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
         
+        stats = [np.concatenate(x, 0) for x in zip(*stats)]
+        
+        if len(stats) and stats[0].any():
+            p, r, ap, f1, _ = ap_per_class(*stats)
+            ap50, ap = ap[:, 0], ap.mean(1)
+            mp, mr, map50, map95, f1 = p.mean(), r.mean(), ap50.mean(), ap, f1.mean()
+        else:
+            mp, mr, map50, map95, f1 = 0., 0., 0., 0., 0.
+
+        print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, P: {mp:.4f}, R: {mr:.4f}, mAP@.5: {map50:.4f}, mAP@.5-.95: {map95:.4f}, F1: {f1:.4f}")
+
         # Update history
         history['train_loss'].append(avg_train_loss)
         history['val_loss'].append(avg_val_loss)
-        history['precision'].append(val_precision) # Replace with real metric
-        history['recall'].append(val_recall)       # Replace with real metric
-        history['map_0.5'].append(val_map)       # Replace with real metric
+        history['f1'].append(f1)
+        history['precision'].append(mp)
+        history['recall'].append(mr)
+        history['map_0.5'].append(map50)
+        history['map_0.5:0.95'].append(map95)
+        history['batch_iou'].append(np.mean(batch_max_ious) if batch_max_ious else 0.0)
 
         # Save checkpoints
         last_ckpt_path = os.path.join(run_dir, 'last.pt')
@@ -307,7 +451,7 @@ if __name__ == '__main__':
     config = {
         'data_yaml': 'dataset/data.yaml',
         'img_size': 640,
-        'batch_size': 8,
+        'batch_size': 16,
         'epochs': 50,
         'learning_rate': 0.001
     }
