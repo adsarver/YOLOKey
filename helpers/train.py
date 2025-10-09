@@ -7,16 +7,17 @@ import math
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-import torchvision
 from torchmetrics.detection import MeanAveragePrecision
 import random
 from torchvision.utils import draw_bounding_boxes, save_image
 from torchvision.transforms import v2
+
 # Add parent directory to path to allow imports from models/
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from models.YOLOBase import YOLOBase
+from helpers.loss import ComputeLoss
 from helpers.data import YoloDataset, yolo_collate_fn
 
 # --- Utility Functions ---
@@ -140,115 +141,6 @@ def log_random_image_predictions(model, val_loader, device, run_dir, epoch, clas
     # Save the image
     save_path = os.path.join(run_dir, f"epoch_{epoch+1}_predictions.jpg")
     save_image(img_to_draw / 255.0, save_path)
-    
-# --- Loss and Metrics Calculation ---
-class ComputeLoss:
-    def __init__(self, model):
-        self.device = next(model.parameters()).device
-        self.hyp = {'box': 0.05, 'cls': 0.5, 'obj': 1.0}
-        self.bce_cls = torch.nn.BCEWithLogitsLoss()
-        self.bce_obj = torch.nn.BCEWithLogitsLoss()
-        self.model = model
-
-    def __call__(self, preds, targets):
-        lcls, lbox, lobj = torch.zeros(1, device=self.device), torch.zeros(1, device=self.device), torch.zeros(1, device=self.device)
-        tcls, tbox, indices, anchors = self.build_targets(preds, targets)
-
-        for i, pred_layer in enumerate(preds):
-            b, a, gj, gi = indices[i]
-            tobj = torch.zeros_like(pred_layer[..., 0], device=self.device)
-
-            n = b.shape[0]
-            if n:
-                ps = pred_layer[b, a, gj, gi]
-                
-                pxy = ps[:, :2].sigmoid() * 2 - 0.5
-                pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
-                pbox = torch.cat((pxy, pwh), 1)
-                iou = self.bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, CIoU=True)
-                lbox += (1.0 - iou).mean()
-
-                tobj[b, a, gj, gi] = iou.detach().clamp(0).type(tobj.dtype)
-
-                if self.model.nc > 1:
-                    t = torch.full_like(ps[:, 5:], 0, device=self.device)
-                    t[range(n), tcls[i]] = 1
-                    lcls += self.bce_cls(ps[:, 5:], t)
-            
-            lobj += self.bce_obj(pred_layer[..., 4], tobj)
-
-        lbox *= self.hyp['box']
-        lobj *= self.hyp['obj']
-        lcls *= self.hyp['cls']
-
-        return lbox + lobj + lcls, torch.cat((lbox, lobj, lcls)).detach()
-
-    def build_targets(self, preds, targets):
-        na, nt = self.model.head.na, targets.shape[0]
-        tcls, tbox, indices, anch = [], [], [], []
-        gain = torch.ones(7, device=self.device)
-        ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)
-        
-        for i in range(self.model.head.nl):
-            anchors = self.model.head.anchors[i]
-            gain[2:6] = torch.tensor(preds[i].shape)[[3, 2, 3, 2]]
-            t = targets * gain
-            if nt:
-                r = t[:, :, 4:6] / anchors[:, None]
-                j = torch.max(r, 1. / r).max(2)[0] < 4.0
-                t = t[j]
-            else:
-                t = targets[0]
-            
-            b, c = t[:, :2].long().T
-            gxy = t[:, 2:4]
-            gwh = t[:, 4:6]
-            gij = gxy.long()
-            gi, gj = gij.T
-            
-            a = t[:, 6].long()
-            indices.append((b, a, gj.clamp_(0, int(gain[3].item()) - 1), gi.clamp_(0, int(gain[2].item()) - 1)))
-            tbox.append(torch.cat((gxy - gij, gwh), 1))
-            anch.append(anchors[a])
-            tcls.append(c)
-        
-        return tcls, tbox, indices, anch
-
-    def bbox_iou(self, box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
-        # Returns the IoU of box1 to box2. box1 is 4xn, box2 is nx4
-        box2 = box2.T
-
-        # Get the coordinates of bounding boxes
-        if x1y1x2y2:  # x1, y1, x2, y2 = box1
-            b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
-            b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
-        else:  # transform from xywh to xyxy
-            b1_x1, b1_x2 = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
-            b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
-            b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
-            b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
-
-        inter_rect_x1 = torch.max(b1_x1, b2_x1)
-        inter_rect_y1 = torch.max(b1_y1, b2_y1)
-        inter_rect_x2 = torch.min(b1_x2, b2_x2)
-        inter_rect_y2 = torch.min(b1_y2, b2_y2)
-        inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, min=0) * \
-                     torch.clamp(inter_rect_y2 - inter_rect_y1, min=0)
-        b1_area = (b1_x2 - b1_x1) * (b1_y2 - b1_y1)
-        b2_area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)
-        iou = inter_area / (b1_area + b2_area - inter_area + 1e-16)
-
-        if CIoU:
-            cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)
-            ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)
-            c2 = cw ** 2 + ch ** 2 + eps
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4
-            v = (4 / math.pi ** 2) * torch.pow(torch.atan((b2_x2 - b2_x1) / (b2_y2 - b2_y1)) - torch.atan((b1_x2 - b1_x1) / (b1_y2 - b1_y1)), 2)
-            with torch.no_grad():
-                alpha = v / (v - iou + (1.0 + eps))
-            return iou - (rho2 / c2 + v * alpha)
-        return iou
 
 # --- Main Training Function ---
 def train(config):
@@ -427,9 +319,9 @@ def train(config):
 
 if __name__ == '__main__':
     config = {
-        'data_yaml': 'dataset/data.yaml',
-        'img_size': 640,
-        'batch_size': 256,
+        'data_yaml': 'dataset128/data.yaml',
+        'img_size': 128,
+        'batch_size': 64,
         'epochs': 500,
         'learning_rate': 0.001
     }

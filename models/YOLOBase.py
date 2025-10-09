@@ -1,105 +1,157 @@
+import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from helpers.yoloHelpers import Conv, RepConv, SPPELAN, RepNCSPELAN4, Detect
+from helpers.yoloHelpers import Silence, Conv, RepNCSPELAN4, AConv, SPPELAN, Concat, CBLinear, CBFuse, DualDDetect, meta
+
+# --- Main YOLOv9 Model ---
 
 class YOLOBase(nn.Module):
     """
-    Based off YOLOv9n architecture with an integrated Detect head.
-    Args:
-        nc (int): number of classes.
-        ch (int): number of input channels. Default is 3 (for RGB images).
+    YOLOv9 model implemented in PyTorch based on 
+    https://github.com/WongKinYiu/yolov9/ YAML configuration.
     """
-    def __init__(self, nc, ch=3):
+    def __init__(self, nc=80, ch=3):
         super().__init__()
-        self.nc = nc # number of classes
-        
-        # Define anchors for the detection head
-        anchors = [
-            [10, 13, 16, 30, 33, 23],      # P3/8
-            [30, 61, 62, 45, 59, 119],     # P4/16
-            [116, 90, 156, 198, 373, 326]  # P5/32
-        ]
-
-        self.stem = Conv(3, 64, 3, 2)
+        self.nc = nc
+        self.hyp = meta  # Placeholder for hyperparameters if needed
 
         # --- Backbone ---
-        self.backbone1 = nn.Sequential(
-            Conv(64, 128, 3, 2),
-            RepNCSPELAN4(128, 128, 64, 32)
-        )
-        self.backbone2 = nn.Sequential(
-            Conv(128, 128, 3, 2),
-            RepNCSPELAN4(128, 128, 64, 32)
-        )
-        self.backbone3 = nn.Sequential(
-            Conv(128, 256, 3, 2),
-            RepNCSPELAN4(256, 256, 128, 64)
-        )
-        self.backbone4 = nn.Sequential(
-            Conv(256, 256, 3, 2),
-            RepNCSPELAN4(256, 256, 128, 64)
-        )
-        self.spp = SPPELAN(256, 256, c_spp=128)
+        self.b0 = Silence()                                     # 0
+        self.b1 = Conv(ch, 32, 3, 2)                            # 1
+        self.b2 = Conv(32, 64, 3, 2)                            # 2
+        self.b3 = RepNCSPELAN4(64, 128, 128, 64, 1)                  # 3 
+        self.b4 = AConv(128, 240)                                    # 4
+        self.b5 = RepNCSPELAN4(240, 240, 240, 120, 1)                # 5
+        self.b6 = AConv(240, 360)                                    # 6
+        self.b7 = RepNCSPELAN4(360, 360, 360, 180, 1)                # 7
+        self.b8 = AConv(360, 480)                                    # 8
+        self.b9 = RepNCSPELAN4(480, 480, 480, 240, 1)                # 9
 
-        # --- Neck (Feature Pyramid Network - FPN) ---
-        self.neck1 = Conv(256, 128, 1, 1) # P5 to P5_latent
-        self.neck2 = Conv(256, 128, 1, 1) # P4 to P4_latent
-        
-        self.neck3 = RepNCSPELAN4(256, 256, 128, 64) # P4_in = P4_latent (128) + upsample(P5_latent) (128)
-        
-        self.neck4 = Conv(256, 128, 1, 1) # P4_out to P4_up_latent
-        self.neck5 = Conv(128, 128, 1, 1) # P3 to P3_latent
+        # --- Head (FPN Path) ---
+        self.h10 = SPPELAN(480, 480, 240)                            # 10
+        self.h11 = nn.Upsample(scale_factor=2, mode='nearest')  # 11
+        self.h12 = Concat(1)                                    # 12
+        self.h13 = RepNCSPELAN4(840, 360, 360, 180, 1)         # 13, from cat(11, 7)
+        self.h14 = nn.Upsample(scale_factor=2, mode='nearest')  # 14
+        self.h15 = Concat(1)                                    # 15
+        self.h16 = RepNCSPELAN4(600, 240, 240, 120, 1)         # 16, from cat(14, 5)
 
-        self.neck6 = RepNCSPELAN4(256, 128, 64, 32) # P3_in = P3_latent (128) + upsample(P4_up_latent) (128)
-
-        # --- Head (Path Aggregation Network - PAN) ---
-        self.pan1 = Conv(128, 128, 3, 2) # P3_out to P3_down
+        # --- Head (PAN Path) ---
+        self.h17 = AConv(240, 180)                                   # 17
+        self.h18 = Concat(1)                                    # 18
+        self.h19 = RepNCSPELAN4(540, 360, 360, 180, 1)         # 19, from cat(17, 13) 
+        self.h20 = AConv(360, 240)                                   # 20
+        self.h21 = Concat(1)                                    # 21
+        self.h22 = RepNCSPELAN4(720, 480, 480, 240, 1)         # 22, from cat(20, 10)
         
-        self.pan2 = RepNCSPELAN4(384, 256, 128, 64) # P4_pan_in = P3_down (128) + P4_out (256)
+        # --- Routing and Auxiliary Head ---
+        self.h23 = CBLinear(240, [240])                         # 23, from 5
+        self.h24 = CBLinear(360, [240, 360])                    # 24, from 7
+        self.h25 = CBLinear(480, [240, 360, 480])               # 25, from 9
 
-        self.pan3 = Conv(256, 256, 3, 2) # P4_pan_out to P4_down
+        self.h26 = Conv(ch, 32, 3, 2)                            # 26, from 0 (input)
+        self.h27 = Conv(32, 64, 3, 2)                           # 27
+        self.h28 = RepNCSPELAN4(64, 128, 128, 64, 1)                 # 28
+        self.h29 = AConv(128, 240)                                   # 29
+        self.h30 = CBFuse([0, 0, 0])                       # 30, from [23, 24, 25, -1]
+    
+        self.h31 = RepNCSPELAN4(240, 240, 240, 120, 1)               # 31 ------------------ STOPPED HERE
+        self.h32 = AConv(240, 360)                                   # 32
+        self.h33 = CBFuse([1, 1])                          # 33, from [24, 25, -1]
         
-        self.pan4 = RepNCSPELAN4(512, 256, 128, 64) # P5_pan_in = P4_down (256) + P5 (256)
+        self.h34 = RepNCSPELAN4(360, 360, 360, 180, 1)               # 34
+        self.h35 = AConv(360, 480)                                   # 35
+        self.h36 = CBFuse([2])                             # 36, from [25, -1]
+
+        self.h37 = RepNCSPELAN4(480, 480, 480, 240, 1)               # 37
 
         # --- Detection Head ---
-        self.head = Detect(nc, anchors=anchors, ch=(128, 256, 256))
-        self.head.stride = torch.tensor([8., 16., 32.])
+        # Input channels for DualDDetect from layers [31, 34, 37, 16, 19, 22]
+        ch_detect = [240, 360, 480, 240, 360, 480]
+        self.h38 = DualDDetect(nc, ch=ch_detect)                # 38
+        
+        
+        self.model = nn.ModuleList([
+            self.b0, self.b1, self.b2, self.b3, self.b4, self.b5, self.b6, self.b7, self.b8, self.b9, # 0-9
+            self.h10, self.h11, self.h12, self.h13, self.h14, self.h15, self.h16, self.h17, self.h18, self.h19, # 10-19
+            self.h20, self.h21, self.h22, self.h23, self.h24, self.h25, self.h26, self.h27, self.h28, self.h29, # 20-29
+            self.h30, self.h31, self.h32, self.h33, self.h34, self.h35, self.h36, self.h37, self.h38  # 30-38
+        ])
 
     def forward(self, x):
-        # Backbone
-        x2 = self.backbone1(self.stem(x))
-        x3 = self.backbone2(x2)
-        x4 = self.backbone3(x3)
-        x5 = self.spp(self.backbone4(x4))
+        # Store intermediate outputs for skip connections
+        outputs = {}
 
-        # FPN Neck
-        p5_latent = self.neck1(x5)
-        p4_latent = self.neck2(x4)
+        # --- Backbone ---
+        outputs[0] = self.b0(x)
+        x1 = self.b1(outputs[0])
+        x2 = self.b2(x1)
+        x3 = self.b3(x2)
+        x4 = self.b4(x3)
+        outputs[5] = self.b5(x4)
+        x6 = self.b6(outputs[5])
+        outputs[7] = self.b7(x6)
+        x8 = self.b8(outputs[7])
+        outputs[9] = self.b9(x8)
+
+        # --- Head (FPN) ---
+        outputs[10] = self.h10(outputs[9])
+        x11 = self.h11(outputs[10])
+        x12 = self.h12([x11, outputs[7]])
+        outputs[13] = self.h13(x12)
+        x14 = self.h14(outputs[13])
+        x15 = self.h15([x14, outputs[5]])
+        main_p3 = self.h16(x15) # Output for detection (layer 16)
         
-        p5_upsampled = F.interpolate(p5_latent, size=p4_latent.shape[2:], mode='nearest')
-        p4_out = self.neck3(torch.cat([p4_latent, p5_upsampled], 1))
+        # --- Head (PAN) ---
+        x17 = self.h17(main_p3)
+        x18 = self.h18([x17, outputs[13]])
+        main_p4 = self.h19(x18) # Output for detection (layer 19)
+        x20 = self.h20(main_p4)
+        x21 = self.h21([x20, outputs[10]])
+        main_p5 = self.h22(x21) # Output for detection (layer 22)
 
-        p4_up_latent = self.neck4(p4_out)
-        p3_latent = self.neck5(x3)
+        # --- Routing and Auxiliary Head ---
+        cb_out_23 = self.h23(outputs[5])
+        cb_out_24 = self.h24(outputs[7])
+        cb_out_25 = self.h25(outputs[9])
+        # cb_signals = cb_out_23 + cb_out_24 + cb_out_25
 
-        p4_upsampled = F.interpolate(p4_up_latent, size=p3_latent.shape[2:], mode='nearest')
-        p3_out = self.neck6(torch.cat([p3_latent, p4_upsampled], 1))
-
-        # PAN Head
-        p3_downsampled = self.pan1(p3_out)
-        p4_pan_out = self.pan2(torch.cat([p3_downsampled, p4_out], 1))
-
-        p4_downsampled = self.pan3(p4_pan_out)
-        p5_pan_out = self.pan4(torch.cat([p4_downsampled, x5], 1))
+        x26 = self.h26(outputs[0])
+        x27 = self.h27(x26)
+        x28 = self.h28(x27)
+        x29 = self.h29(x28)
+        x30 = self.h30([cb_out_23, cb_out_24, cb_out_25, x29])
         
-        # Pass feature maps to the detection head
-        return self.head([p3_out, p4_pan_out, p5_pan_out])
+        aux_p3 = self.h31(x30) # Output for detection (layer 31)
+        x32 = self.h32(aux_p3)
+        x33 = self.h33([cb_out_24, cb_out_25, x32])
 
-    def fuse(self):
-        """Fuse RepConv layers for faster inference."""
-        for m in self.modules():
-            if hasattr(m, 'fuse') and callable(m.fuse):
-                m.fuse()
-        return self
+        aux_p4 = self.h34(x33) # Output for detection (layer 34)
+        x35 = self.h35(aux_p4)
+        x36 = self.h36([cb_out_25, x35])
 
+        aux_p5 = self.h37(x36) # Output for detection (layer 37)
+        
+        # --- Detection ---
+        preds = self.h38([aux_p3, aux_p4, aux_p5, main_p3, main_p4, main_p5])
+        
+        self.model = nn.ModuleList([
+            self.b0, self.b1, self.b2, self.b3, self.b4, self.b5, self.b6, self.b7, self.b8, self.b9, # 0-9
+            self.h10, self.h11, self.h12, self.h13, self.h14, self.h15, self.h16, self.h17, self.h18, self.h19, # 10-19
+            self.h20, self.h21, self.h22, self.h23, self.h24, self.h25, self.h26, self.h27, self.h28, self.h29, # 20-29
+            self.h30, self.h31, self.h32, self.h33, self.h34, self.h35, self.h36, self.h37, self.h38  # 30-38
+        ])
+        
+        # The loss function expects a flat list of tensors. The traceback indicates it's receiving a 
+        # nested list (likely [aux_preds, main_preds]). We flatten it here during training.
+        if self.training:
+            if isinstance(preds, (list, tuple)) and len(preds) > 0 and isinstance(preds[0], (list, tuple)):
+                # Flatten the nested list into a single list of tensors
+                return preds[0] + preds[1]
+            return preds  # Return as-is if already flat
+        else:  # Inference
+            if isinstance(preds, (list, tuple)) and len(preds) > 0 and isinstance(preds[0], (list, tuple)):
+                # For inference, return only the main predictions
+                return preds[1]
+            return preds
