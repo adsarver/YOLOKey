@@ -11,7 +11,7 @@ import torchvision
 from torchmetrics.detection import MeanAveragePrecision
 import random
 from torchvision.utils import draw_bounding_boxes, save_image
-
+from torchvision.transforms import v2
 # Add parent directory to path to allow imports from models/
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -270,16 +270,19 @@ def train(config):
     mean = (0.4914, 0.4822, 0.4465)
     std  = (0.2470, 0.2435, 0.2616)
     
-    trtransforms = torchvision.transforms.Compose([
-        torchvision.transforms.ToPILImage(),
-        torchvision.transforms.ToTensor(),
-        # torchvision.transforms.Normalize(mean, std)
+    trtransforms = v2.Compose([
+        v2.ToImage(),  # Convert to tensor, only needed if you had a PIL image
+        v2.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
+        v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.3, hue=0.2),
+        v2.RandomErasing(scale=(0.02, 0.33), ratio=(0.3, 3.3), value=1, inplace=False),
+        v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
+        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
-    
-    valtransforms = torchvision.transforms.Compose([
-        torchvision.transforms.ToPILImage(),
-        torchvision.transforms.ToTensor(),
-        # torchvision.transforms.Normalize(mean, std)
+
+    valtransforms = v2.Compose([
+        v2.ToPILImage(),
+        v2.ToTensor(),
+        # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
     # --- DataLoaders ---
@@ -424,8 +427,8 @@ def train(config):
 
 if __name__ == '__main__':
     config = {
-        'data_yaml': 'dataset128/data.yaml',
-        'img_size': 128,
+        'data_yaml': 'dataset/data.yaml',
+        'img_size': 640,
         'batch_size': 256,
         'epochs': 500,
         'learning_rate': 0.001
