@@ -17,7 +17,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from models.YOLOBase import YOLOBase
-from helpers.data import YOLODataset
+from helpers.data import YOLODataset, yolo_collate_fn
 
 # --- Utility Functions ---
 
@@ -209,13 +209,13 @@ def train(config):
     train_img_dir = train_img_dir.replace('../', '')
     train_label_dir = train_img_dir.replace('images', 'labels')
     train_dataset = YOLODataset(img_dir=train_img_dir, label_dir=train_label_dir, transforms=trtransforms)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=yolo_collate_fn)
 
     val_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['val'])
     val_img_dir = val_img_dir.replace('../', '')
     val_label_dir = val_img_dir.replace('images', 'labels')
     val_dataset = YOLODataset(img_dir=val_img_dir, label_dir=val_label_dir, transforms=valtransforms)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, collate_fn=yolo_collate_fn)
 
     # Model
     model = YOLOBase(num_classes=nc, num_anchors=3).to(device)

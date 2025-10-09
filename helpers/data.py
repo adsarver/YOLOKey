@@ -35,3 +35,50 @@ class YOLODataset(Dataset):
         if self.transforms:
             image = self.transforms(image)
         return image, torch.tensor(boxes)
+    
+def yolo_collate_fn(batch):
+    """
+    Collate function to handle images and labels of different sizes.
+    Pads images to the maximum size in the batch and pads labels with zeros.
+    """
+    # Separate images and labels from the batch
+    images = [item[0] for item in batch]
+    labels = [item[1] for item in batch]
+
+    # Find the maximum image dimensions in the batch
+    max_h = max(img.shape[1] for img in images)
+    max_w = max(img.shape[2] for img in images)
+    
+    # Pad images to the maximum size
+    padded_images = []
+    for img in images:
+        h, w = img.shape[1:]
+        # Calculate padding amounts
+        pad_h = max_h - h
+        pad_w = max_w - w
+        
+        # Pad the image. Assuming NCHW format
+        padded_img = torch.nn.functional.pad(img, (0, pad_w, 0, pad_h), 'constant', 0)
+        padded_images.append(padded_img)
+    
+    # Stack padded images
+    images_tensor = torch.stack(padded_images, dim=0)
+
+    # Pad labels to the maximum number of boxes in the batch
+    max_boxes = max(len(label) for label in labels)
+    
+    # Pad labels with zeros to a uniform size
+    padded_labels = []
+    for label in labels:
+        num_boxes = len(label)
+        # Create a zero tensor for padding
+        padded_label = torch.zeros((max_boxes, 5), dtype=torch.float32)
+        if num_boxes > 0:
+            padded_label[:num_boxes, :] = label
+        padded_labels.append(padded_label)
+
+    # Stack padded labels
+    labels_tensor = torch.stack(padded_labels, dim=0)
+
+    return images_tensor, labels_tensor
+
