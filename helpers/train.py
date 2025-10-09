@@ -266,18 +266,33 @@ def train(config):
     
     with open(data_yaml_path, 'r') as f:
         data_config = yaml.safe_load(f)
+        
+    mean = (0.4914, 0.4822, 0.4465)
+    std  = (0.2470, 0.2435, 0.2616)
+    
+    trtransforms = torchvision.transforms.Compose([
+        torchvision.transforms.ToPILImage(),
+        torchvision.transforms.ToTensor(),
+        # torchvision.transforms.Normalize(mean, std)
+    ])
+    
+    valtransforms = torchvision.transforms.Compose([
+        torchvision.transforms.ToPILImage(),
+        torchvision.transforms.ToTensor(),
+        # torchvision.transforms.Normalize(mean, std)
+    ])
 
     # --- DataLoaders ---
     train_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['train'])
     train_img_dir = train_img_dir.replace('../', '')
     train_label_dir = train_img_dir.replace('images', 'labels')
-    train_dataset = YoloDataset(img_dir=train_img_dir, label_dir=train_label_dir, img_size=img_size)
+    train_dataset = YoloDataset(img_dir=train_img_dir, label_dir=train_label_dir, img_size=img_size, transform=trtransforms)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=yolo_collate_fn, num_workers=4)
 
     val_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['val'])
     val_img_dir = val_img_dir.replace('../', '')
     val_label_dir = val_img_dir.replace('images', 'labels')
-    val_dataset = YoloDataset(img_dir=val_img_dir, label_dir=val_label_dir, img_size=img_size)
+    val_dataset = YoloDataset(img_dir=val_img_dir, label_dir=val_label_dir, img_size=img_size, transform=valtransforms)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=yolo_collate_fn, num_workers=4)
 
     # Model
@@ -380,7 +395,7 @@ def train(config):
 
         map50 = results['map_50'].item()
         map95 = results['map'].item()
-        mar100 = results['mar_100'].item()
+        mar100 = results['mar_100'].item() 
 
         print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, mAP@.50: {map50:.4f}, mAP@.50-.95: {map95:.4f}, mAR@100: {mar100:.4f}")
 
@@ -411,8 +426,8 @@ if __name__ == '__main__':
     config = {
         'data_yaml': 'dataset128/data.yaml',
         'img_size': 128,
-        'batch_size': 128,
-        'epochs': 10,
+        'batch_size': 256,
+        'epochs': 500,
         'learning_rate': 0.001
     }
     train(config)

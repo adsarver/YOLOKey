@@ -40,7 +40,6 @@ class YoloDataset(Dataset):
         # Using OpenCV to load the image
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        h, w, _ = img.shape
 
         # --- Load Labels ---
         label_path = self._get_label_path(img_path)
@@ -56,11 +55,6 @@ class YoloDataset(Dataset):
                     
                     labels.append(bbox)
         labels = torch.tensor(labels, dtype=torch.float32)
-
-        # --- Preprocessing and Augmentation ---
-        # For now, we'll just do a simple resize.
-        # A full implementation would have more complex augmentations.
-        img = cv2.resize(img, (self.img_size, self.img_size))
 
         if self.transform:
             img = self.transform(img)
