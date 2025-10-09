@@ -4,15 +4,10 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import yaml
 from tqdm import tqdm
-import math
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from torchmetrics.detection import MeanAveragePrecision
-import random
-from torchvision.utils import draw_bounding_boxes, save_image
 from torchvision.transforms import v2
-import cv2
 
 # Add parent directory to path to allow imports from models/
 import sys
@@ -22,10 +17,9 @@ from models.YOLOBase import YOLOBase
 from helpers.loss import ComputeLoss
 from helpers.data import YoloDataset, yolo_collate_fn
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, non_max_suppression, output_to_target, process_batch, scale_boxes
-from utils.utils import xywh2xyxy, colors
+from utils.utils import xywh2xyxy, un_normalize_image, log_image_predictions
 
 # --- Utility Functions ---
-
 def get_next_run_dir(base_dir='runs'):
     """Gets the next available run directory."""
     if not os.path.exists(base_dir):
@@ -75,7 +69,7 @@ def plot_results(history, save_path):
     print(f"Results plot saved to {save_path}")
 
 # --- Main Training Function ---
-def train(config):
+def train(config, model):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
@@ -98,19 +92,23 @@ def train(config):
     iouv = torch.linspace(0.5, 0.95, 10).to(device)  # IoU vector for mAP@0.5:0.95
     niou = iouv.numel()
     
+    # --- Data Augmentation ---
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    
     trtransforms = v2.Compose([
         v2.ToImage(),  # Convert to tensor, only needed if you had a PIL image
         v2.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
         v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.3, hue=0.2),
         v2.RandomErasing(scale=(0.02, 0.33), ratio=(0.3, 3.3), value=1, inplace=False),
         v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
-        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        v2.Normalize(mean=mean, std=std),
     ])
 
     valtransforms = v2.Compose([
         v2.ToImage(),
         v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
-        # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        v2.Normalize(mean=mean, std=std),
     ])
 
     # --- DataLoaders ---
@@ -127,13 +125,10 @@ def train(config):
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=yolo_collate_fn, num_workers=4)
 
     # Model
-    model = YOLOBase(nc=nc).to(device)
+    model = model(nc=nc).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
     compute_loss = ComputeLoss(model)
-    
-    # --- TorchMetrics ---
-    metric = MeanAveragePrecision(box_format='xywh', backend="faster_coco_eval").to(device)
-    
+        
     # Training history
     history = {
         'train_loss': [], 
@@ -193,6 +188,10 @@ def train(config):
                 val_loss += loss.item()
                 
                 preds = non_max_suppression(preds[0], conf_thres=0.001, iou_thres=0.7, labels=data_config.get('labels'), multi_label=True, agnostic=False, max_det=100)
+                # Plot images
+                if (epoch+1 % 20 == 0 or epoch == 0) and len(stats) == 0:
+                    log_image_predictions(images[0].cpu(), targets[targets[:, 0] == 0][:, 1:].cpu(), preds[0], run_dir, epoch, names)
+                    
                 for si, pred in enumerate(preds):
                     labels = torch.Tensor(targets[targets[:, 0] == si, 1:]).to(device)  # labels for image si
                     nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
@@ -216,10 +215,6 @@ def train(config):
                         confusion_matrix.process_batch(predn, labelsn)
                     stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
 
-                # Plot images
-                # plot_images(images, targets, paths, run_dir / f'val_batch{batch_i}_labels.jpg', names)  # labels
-                # plot_images(images, output_to_target(preds), paths, run_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
-
                 pbar_val.set_postfix({
                     'Loss': f"{loss.item():.4f}",
                     'Box': f"{components[0]:.4f}",
@@ -227,7 +222,7 @@ def train(config):
                     'Cls': f"{components[2]:.4f}",
                     'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
                 })                       
-                                
+         
         avg_val_loss = val_loss / len(val_loader)
         
         # Compute metrics
@@ -275,5 +270,5 @@ if __name__ == '__main__':
         'epochs': 500,
         'learning_rate': 0.001
     }
-    train(config)
+    train(config, YOLOBase)
 

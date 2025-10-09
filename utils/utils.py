@@ -6,6 +6,79 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 import torch.nn as nn
+import cv2
+
+def un_normalize_image(tensor):
+    """Reverses the normalization on an image tensor."""
+    # These are the standard ImageNet mean and std
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    
+    # Move tensor to CPU and convert to NumPy
+    img_np = tensor.cpu().numpy().transpose(1, 2, 0)
+    
+    # Un-normalize
+    img_np = std * img_np + mean
+    img_np = np.clip(img_np, 0, 1)
+    
+    # Convert to 8-bit unsigned integer format for image display
+    img_uint8 = (img_np * 255).astype(np.uint8)
+    
+    # Return a contiguous copy to avoid potential issues with OpenCV
+    return img_uint8.copy()
+
+def log_image_predictions(image_tensor, targets, predictions, save_dir, epoch, class_names, conf_thres=0.3):
+    """
+    Saves an image with ground truth and prediction boxes drawn on it.
+
+    Args:
+        image_tensor (torch.Tensor): A single normalized image tensor (C, H, W).
+        targets (torch.Tensor): Ground truth labels for this image [class, x, y, w, h].
+        predictions (torch.Tensor): Predictions from the model after NMS [x1, y1, x2, y2, conf, class].
+        save_dir (str): Directory to save the image.
+        epoch (int): The current epoch number, for file naming.
+        class_names (list): List of class names for labeling boxes.
+        conf_thres (float): Confidence threshold to filter predictions.
+    """
+    # Un-normalize the image for display
+    img = un_normalize_image(image_tensor)
+    h, w, _ = img.shape
+
+    # --- Draw Ground Truth Boxes (in green) ---
+    if targets is not None and len(targets) > 0:
+        for t in targets:
+            class_id, x_center, y_center, box_w, box_h = t
+            
+            # Convert normalized xywh to pixel xyxy
+            x1 = int((x_center - box_w / 2) * w)
+            y1 = int((y_center - box_h / 2) * h)
+            x2 = int((x_center + box_w / 2) * w)
+            y2 = int((y_center + box_h / 2) * h)
+            
+            # Draw the box
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # Put class name label
+            label = class_names[int(class_id)]
+            cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    # --- Draw Prediction Boxes (in red) ---
+    if predictions is not None and len(predictions) > 0:
+        # Filter predictions by confidence threshold
+        predictions = predictions[predictions[:, 4] >= conf_thres]
+        
+        for p in predictions:
+            x1, y1, x2, y2, conf, class_id = p
+            
+            # Draw the box
+            cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+            # Put class name and confidence label
+            label = f'{class_names[int(class_id)]} {conf:.2f}'
+            cv2.putText(img, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    # Save the image
+    save_path = os.path.join(save_dir, f"epoch_{epoch+1}_predictions.png")
+    # Convert from RGB (matplotlib/PIL) to BGR (OpenCV) before saving
+    cv2.imwrite(save_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
 def xyxy2xywh(x):
     # Convert nx4 boxes from [x1, y1, x2, y2] to [x, y, w, h] where xy1=top-left, xy2=bottom-right
