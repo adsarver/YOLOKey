@@ -15,7 +15,19 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
-from helpers.utils import colors
+from utils.utils import colors
+
+meta = {
+    'box': (1, 0.02, 0.2),  # box loss gain
+    'cls': (1, 0.2, 4.0),  # cls loss gain
+    'cls_pw': 1.0,  # cls BCELoss positive_weight
+    'obj': (1, 0.2, 4.0),  # obj loss gain (scale with pixels)
+    'obj_pw': (1, 0.5, 2.0),  # obj BCELoss positive_weight
+    'iou_t': (0, 0.1, 0.7),  # IoU training threshold
+    'anchor_t': (1, 2.0, 8.0),  # anchor-multiple threshold
+    'anchors': (2, 2.0, 10.0),  # anchors per output grid (0 to ignore)
+    'fl_gamma': 1.5,  # focal loss gamma (efficientDet default gamma=1.5)
+}  # segment copy-paste (probability)
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     # Pad to 'same' shape outputs
@@ -70,18 +82,6 @@ class DFL(nn.Module):
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
 
-meta = {
-    'box': (1, 0.02, 0.2),  # box loss gain
-    'cls': (1, 0.2, 4.0),  # cls loss gain
-    'cls_pw': (1, 0.5, 2.0),  # cls BCELoss positive_weight
-    'obj': (1, 0.2, 4.0),  # obj loss gain (scale with pixels)
-    'obj_pw': (1, 0.5, 2.0),  # obj BCELoss positive_weight
-    'iou_t': (0, 0.1, 0.7),  # IoU training threshold
-    'anchor_t': (1, 2.0, 8.0),  # anchor-multiple threshold
-    'anchors': (2, 2.0, 10.0),  # anchors per output grid (0 to ignore)
-    'fl_gamma': 1.5,  # focal loss gamma (efficientDet default gamma=1.5)
-}  # segment copy-paste (probability)
-
 class DualDDetect(nn.Module):
     # YOLO Detect head for detection models
     dynamic = False  # force grid reconstruction
@@ -89,7 +89,7 @@ class DualDDetect(nn.Module):
     shape = None # init
     strides = torch.empty(0)  # init
 
-    def __init__(self, nc=80, ch=(), inplace=True):  # detection layer
+    def __init__(self, nc, ch=(), inplace=True):  # detection layer
         super().__init__()
         self.nc = nc  # number of classes
         self.nl = len(ch) // 2  # number of detection layers
@@ -175,22 +175,15 @@ class AConv(nn.Module):
     def forward(self, x):
         x = torch.nn.functional.avg_pool2d(x, 2, 1, 0, False, True)
         return self.cv1(x)
-
-
-class ADown(nn.Module):
+    
+class MConv(nn.Module):
     def __init__(self, c1, c2):  # ch_in, ch_out, shortcut, kernels, groups, expand
         super().__init__()
-        self.c = c2 // 2
-        self.cv1 = Conv(c1 // 2, self.c, 3, 2, 1)
-        self.cv2 = Conv(c1 // 2, self.c, 1, 1, 0)
+        self.cv1 = Conv(c1, c2, 3, 2, 1)
 
     def forward(self, x):
-        x = torch.nn.functional.avg_pool2d(x, 2, 1, 0, False, True)
-        x1,x2 = x.chunk(2, 1)
-        x1 = self.cv1(x1)
-        x2 = torch.nn.functional.max_pool2d(x2, 3, 2, 1)
-        x2 = self.cv2(x2)
-        return torch.cat((x1, x2), 1)
+        x = torch.nn.functional.max_pool2d(x, 2, 1, 0)
+        return self.cv1(x)
 
 
 class RepConvN(nn.Module):

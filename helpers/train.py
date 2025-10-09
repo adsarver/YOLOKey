@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -11,6 +12,7 @@ from torchmetrics.detection import MeanAveragePrecision
 import random
 from torchvision.utils import draw_bounding_boxes, save_image
 from torchvision.transforms import v2
+import cv2
 
 # Add parent directory to path to allow imports from models/
 import sys
@@ -19,6 +21,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from models.YOLOBase import YOLOBase
 from helpers.loss import ComputeLoss
 from helpers.data import YoloDataset, yolo_collate_fn
+from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, non_max_suppression, output_to_target, process_batch, scale_boxes
+from utils.utils import xywh2xyxy, colors
 
 # --- Utility Functions ---
 
@@ -69,78 +73,6 @@ def plot_results(history, save_path):
     plt.savefig(save_path)
     plt.close()
     print(f"Results plot saved to {save_path}")
-    
-def xywh2xyxy(x):
-    """Converts bounding box format from [center_x, center_y, width, height] to [x1, y1, x2, y2]."""
-    y = x.clone()
-    y[:, 0] = x[:, 0] - x[:, 2] / 2
-    y[:, 1] = x[:, 1] - x[:, 3] / 2
-    y[:, 2] = x[:, 0] + x[:, 2] / 2
-    y[:, 3] = x[:, 1] + x[:, 3] / 2
-    return y
-
-def log_random_image_predictions(model, val_loader, device, run_dir, epoch, class_names):
-    """Logs a random image with its ground truth and predicted bounding boxes."""
-    model.eval()
-    
-    # Get a single batch from the validation loader for visualization
-    try:
-        images, targets = next(iter(val_loader))
-    except StopIteration:
-        print("Validation loader is empty, cannot log image.")
-        return
-        
-    images = images.to(device)
-    
-    with torch.no_grad():
-        inference_preds, _ = model(images)
-
-    # Select a random image from the batch
-    img_idx = random.randint(0, images.shape[0] - 1)
-    img_tensor = images[img_idx]
-
-    # Convert image tensor to uint8 for drawing
-    img_to_draw = (img_tensor * 255).to(torch.uint8)
-    img_h, img_w = img_tensor.shape[1:]
-
-    # --- Get and Format Ground Truth Boxes (Green) ---
-    gt_targets = targets[targets[:, 0] == img_idx, 1:]
-    gt_boxes = gt_targets[:, 1:]
-    # Denormalize
-    gt_boxes_denorm = gt_boxes.clone()
-    gt_boxes_denorm[:, 0] *= img_w
-    gt_boxes_denorm[:, 1] *= img_h
-    gt_boxes_denorm[:, 2] *= img_w
-    gt_boxes_denorm[:, 3] *= img_h
-    gt_boxes_xyxy = xywh2xyxy(gt_boxes_denorm)
-    gt_labels = [class_names[int(c)] for c in gt_targets[:, 0]]
-
-    # --- Get and Format Predicted Boxes (Blue) ---
-    preds_for_img = inference_preds[img_idx]
-    preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
-    
-    vis_conf_thres = 0.25 
-    conf, labels_idx = preds_for_img[:, 5:].max(1)
-    
-    keep_indices = conf > vis_conf_thres
-    
-    pred_boxes = preds_for_img[keep_indices, :4]
-    pred_boxes_xyxy = xywh2xyxy(pred_boxes)
-    pred_scores = conf[keep_indices]
-    pred_labels_idx = labels_idx[keep_indices]
-    
-    pred_labels = [f"{class_names[int(l)]} {s:.2f}" for l, s in zip(pred_labels_idx, pred_scores)]
-
-    # Draw boxes on the image
-    # Draw GT first, then predictions on the result
-    if gt_boxes_xyxy.shape[0] > 0:
-        img_to_draw = draw_bounding_boxes(img_to_draw.cpu(), boxes=gt_boxes_xyxy, labels=gt_labels, colors="green", width=2)
-    if pred_boxes_xyxy.shape[0] > 0:
-        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes_xyxy, labels=pred_labels, colors="blue", width=2)
-
-    # Save the image
-    save_path = os.path.join(run_dir, f"epoch_{epoch+1}_predictions.jpg")
-    save_image(img_to_draw / 255.0, save_path)
 
 # --- Main Training Function ---
 def train(config):
@@ -159,8 +91,12 @@ def train(config):
     with open(data_yaml_path, 'r') as f:
         data_config = yaml.safe_load(f)
         
-    mean = (0.4914, 0.4822, 0.4465)
-    std  = (0.2470, 0.2435, 0.2616)
+    # --- Initialize Metrics ---
+    names = data_config['names']
+    nc = len(names)
+    names = dict(enumerate(names))
+    iouv = torch.linspace(0.5, 0.95, 10).to(device)  # IoU vector for mAP@0.5:0.95
+    niou = iouv.numel()
     
     trtransforms = v2.Compose([
         v2.ToImage(),  # Convert to tensor, only needed if you had a PIL image
@@ -172,8 +108,8 @@ def train(config):
     ])
 
     valtransforms = v2.Compose([
-        v2.ToPILImage(),
-        v2.ToTensor(),
+        v2.ToImage(),
+        v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
         # v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
@@ -191,7 +127,7 @@ def train(config):
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=yolo_collate_fn, num_workers=4)
 
     # Model
-    model = YOLOBase(nc=len(data_config['names'])).to(device)
+    model = YOLOBase(nc=nc).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
     compute_loss = ComputeLoss(model)
     
@@ -202,10 +138,13 @@ def train(config):
     history = {
         'train_loss': [], 
         'val_loss': [], 
-        'map_0.5': [],
+        'precision': [], 
+        'recall': [], 
+        'f1': [], 
+        'map_0.5': [], 
         'map_0.5:0.95': [],
-        'mar_100': []
     }
+
     best_val_loss = float('inf')
 
     # Training Loop
@@ -216,7 +155,7 @@ def train(config):
         for images, targets in pbar_train:
             images = images.to(device)
             targets = targets.to(device)
-            
+
             optimizer.zero_grad()
             preds = model(images)
             loss, components = compute_loss(preds, targets)
@@ -239,70 +178,81 @@ def train(config):
         model.eval()
         val_loss = 0
 
+        # Reset metrics
+        stats = []
+        confusion_matrix = ConfusionMatrix(nc=nc)
+        
         pbar_val = tqdm(val_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Validation]")
         with torch.no_grad():
             for images, targets in pbar_val:
                 images = images.to(device)
                 targets = targets.to(device)
                 
-                inference_preds, train_preds = model(images)
-                loss, _ = compute_loss(train_preds, targets)
+                preds = model(images)
+                loss, components = compute_loss(preds, targets)
                 val_loss += loss.item()
                 
-                # Format for TorchMetrics
-                preds_for_metric = []
-                for pred in inference_preds:
-                    pred[:, 5:] *= pred[:, 4:5]  # conf = obj_conf * cls_conf
-                    conf, _ = pred[:, 5:].max(1)
-                    
-                    
-                    if pred.shape[0] > 100:
-                        # Get the indices of the top K predictions by confidence
-                        topk_indices = conf.topk(100, largest=True).indices
-                        pred = pred[topk_indices]
-                        
-                    conf, labels = pred[:, 5:].max(1)
-                    
-                    preds_for_metric.append(dict(
-                        boxes=pred[:, :4],
-                        scores=conf,
-                        labels=labels.int()
-                    ))
-                    
-                targets_for_metric = []
-                # Un-normalize and format ground truth
-                scaled_targets = targets.clone()
-                scaled_targets[:, 2:] *= torch.tensor([images.shape[3], images.shape[2], images.shape[3], images.shape[2]], device=device)
-                for i in range(images.shape[0]):
-                    labels = scaled_targets[scaled_targets[:, 0] == i, 1:]
-                    targets_for_metric.append(dict(
-                        boxes=labels[:, 1:],
-                        labels=labels[:, 0].int()
-                    ))
-                                
-                metric.update(preds_for_metric, targets_for_metric)
+                preds = non_max_suppression(preds[0], conf_thres=0.001, iou_thres=0.7, labels=data_config.get('labels'), multi_label=True, agnostic=False, max_det=100)
+                for si, pred in enumerate(preds):
+                    labels = torch.Tensor(targets[targets[:, 0] == si, 1:]).to(device)  # labels for image si
+                    nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
+                    # path, shape = Path(paths[si]), shapes[si][0]
+                    correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
 
+                    if npr == 0:
+                        if nl:
+                            stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+                            confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
+                        continue
+
+                    # Predictions
+                    predn = pred.clone()
+
+                    # Evaluate
+                    if nl:
+                        tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                        labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+                        correct = process_batch(predn, labelsn, iouv)
+                        confusion_matrix.process_batch(predn, labelsn)
+                    stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
+
+                # Plot images
+                # plot_images(images, targets, paths, run_dir / f'val_batch{batch_i}_labels.jpg', names)  # labels
+                # plot_images(images, output_to_target(preds), paths, run_dir / f'val_batch{batch_i}_pred.jpg', names)  # pred
+
+                pbar_val.set_postfix({
+                    'Loss': f"{loss.item():.4f}",
+                    'Box': f"{components[0]:.4f}",
+                    'Obj': f"{components[1]:.4f}",
+                    'Cls': f"{components[2]:.4f}",
+                    'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
+                })                       
+                                
         avg_val_loss = val_loss / len(val_loader)
         
+        # Compute metrics
+        stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)] # Compile stats
+        if len(stats) and len([x for x in stats if x.any()]):
+            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=True, save_dir=run_dir, names=names)
+            ap50, ap = ap[:, 0], ap.mean(1) # AP@0.5, AP@0.5:0.95
+            mf1, mp, mr, map50, mean_ap = f1.mean(), p.mean(), r.mean(), ap50.mean(), ap.mean()
+            nt = np.bincount(stats[3].astype(int), minlength=nc) # Number of targets per class
+        else:
+            nt = torch.zeros(1)
+            mf1, mp, mr, map50, mean_ap = 0.0, 0.0, 0.0, 0.0, 0.0
+        
         # Compute and log metrics
-        results = metric.compute()
-        # metric.reset()
-
-        map50 = results['map_50'].item()
-        map95 = results['map'].item()
-        mar100 = results['mar_100'].item() 
-
-        print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}, mAP@.50: {map50:.4f}, mAP@.50-.95: {map95:.4f}, mAR@100: {mar100:.4f}")
+        print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+        print(f"          mAP@.5: {map50:.4f}, mAP@.5:.95: {mean_ap:.4f}, Precision: {mp:.4f}, Recall: {mr:.4f}")
 
         # Update history
         history['train_loss'].append(avg_train_loss)
         history['val_loss'].append(avg_val_loss)
+        history['precision'].append(mp)
+        history['recall'].append(mr)
+        history['f1'].append(mf1)
         history['map_0.5'].append(map50)
-        history['map_0.5:0.95'].append(map95)
-        history['mar_100'].append(mar100)
-        
-        # Log random image predictions
-        log_random_image_predictions(model, val_loader, device, run_dir, epoch, data_config['names'])
+        history['map_0.5:0.95'].append(mean_ap)
 
         # Save checkpoints
         last_ckpt_path = os.path.join(run_dir, 'last.pt')
