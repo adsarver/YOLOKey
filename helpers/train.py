@@ -142,7 +142,7 @@ def log_random_image_predictions(model, val_loader, device, run_dir, epoch, clas
     save_image(img_to_draw / 255.0, save_path)
     
 # --- Loss and Metrics Calculation ---
-def ComputeLoss(predictions, targets, num_classes, lambda_coord=5, lambda_noobj=0.5):
+def lossfn(predictions, targets, num_classes, lambda_coord=5, lambda_noobj=0.5):
     """
     Computes YOLO loss.
     - predictions: Predicted tensor.
@@ -192,9 +192,14 @@ def train(config):
     # -- Transforms ---
     mean = (0.4914, 0.4822, 0.4465)
     std  = (0.2470, 0.2435, 0.2616)
-    transforms = torchvision.transforms.Compose([
+    trtransforms = torchvision.transforms.Compose([
         torchvision.transforms.ToPILImage(),
         torchvision.transforms.Resize((img_size, img_size)),
+        torchvision.transforms.ToTensor(),
+        torchvision.transforms.Normalize(mean, std)
+    ])
+    valtransforms = torchvision.transforms.Compose([
+        torchvision.transforms.ToPILImage(),
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Normalize(mean, std)
     ])
@@ -203,19 +208,19 @@ def train(config):
     train_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['train'])
     train_img_dir = train_img_dir.replace('../', '')
     train_label_dir = train_img_dir.replace('images', 'labels')
-    train_dataset = YOLODataset(img_dir=train_img_dir, label_dir=train_label_dir, transforms=transforms)
+    train_dataset = YOLODataset(img_dir=train_img_dir, label_dir=train_label_dir, transforms=trtransforms)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
 
     val_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['val'])
     val_img_dir = val_img_dir.replace('../', '')
     val_label_dir = val_img_dir.replace('images', 'labels')
-    val_dataset = YOLODataset(img_dir=val_img_dir, label_dir=val_label_dir, transforms=transforms)
+    val_dataset = YOLODataset(img_dir=val_img_dir, label_dir=val_label_dir, transforms=valtransforms)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
 
     # Model
     model = YOLOBase(num_classes=nc, num_anchors=3).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
-    compute_loss = ComputeLoss
+    compute_loss = lossfn
     
     # --- TorchMetrics ---
     metric = MeanAveragePrecision(box_format='xywh', backend="faster_coco_eval").to(device)
