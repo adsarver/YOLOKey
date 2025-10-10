@@ -290,5 +290,5 @@ if __name__ == '__main__':
         'epochs': 500,
         'learning_rate': 0.001
     }
-    train(config, YOLOMax)
+    train(config, YOLOBase)
 
