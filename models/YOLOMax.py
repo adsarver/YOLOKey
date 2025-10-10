@@ -5,7 +5,7 @@ from utils.model_utils import Conv, RepNCSPELAN4, MConv, SPPELAN, ELAN1, Concat,
 
 # --- Main YOLOv9 Model ---
 
-class YOLOBase(nn.Module):
+class YOLOMax(nn.Module):
     """
     YOLOv9 model implemented in PyTorch based on 
     https://github.com/WongKinYiu/yolov9/ YAML configuration.

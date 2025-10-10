@@ -14,6 +14,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from models.YOLOBase import YOLOBase
+from models.YOLOMax import YOLOMax
 from helpers.loss import ComputeLoss
 from helpers.data import YoloDataset, yolo_collate_fn
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, non_max_suppression, output_to_target, process_batch, scale_boxes
@@ -42,7 +43,7 @@ def get_next_run_dir(base_dir='runs'):
 
 def plot_results(history, save_path):
     epochs = range(1, len(history['train_loss']) + 1)
-    fig, axs = plt.subplots(2, 2, figsize=(15, 10)) # Adjusted for 4 plots
+    fig, axs = plt.subplots(2, 4, figsize=(15, 10)) # Adjusted for 4 plots
     fig.suptitle('Training and Validation Metrics')
 
     axs[0, 0].plot(epochs, history['train_loss'], 'bo-', label='Training Loss')
@@ -59,9 +60,27 @@ def plot_results(history, save_path):
     axs[1, 0].set_title('mAP@.50-.95 (Primary Metric)')
     axs[1, 0].grid(True)
     
-    axs[1, 1].plot(epochs, history['mar_100'], 'yo-', label='mAR@100')
-    axs[1, 1].set_title('Mean Average Recall @ 100 Detections')
+    axs[1, 1].plot(epochs, history['precision'], 'go-', label='Precision')
+    axs[1, 1].set_title('Precision')
     axs[1, 1].grid(True)
+
+    axs[1, 2].plot(epochs, history['recall'], 'yo-', label='Recall')
+    axs[1, 2].set_title('Recall')
+    axs[1, 2].grid(True)
+
+    axs[1, 3].plot(epochs, history['f1'], 'ko-', label='F1 Score')
+    axs[1, 3].set_title('F1 Score')
+    axs[1, 3].grid(True)
+
+    history = {
+        'train_loss': [], 
+        'val_loss': [], 
+        'precision': [], 
+        'recall': [], 
+        'f1': [], 
+        'map_0.5': [], 
+        'map_0.5:0.95': [],
+    }
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(save_path)
@@ -248,6 +267,8 @@ def train(config, model):
         history['f1'].append(mf1)
         history['map_0.5'].append(map50)
         history['map_0.5:0.95'].append(mean_ap)
+        # Plot and save results after training is done
+        plot_results(history, os.path.join(run_dir, 'results.png'))
 
         # Save checkpoints
         last_ckpt_path = os.path.join(run_dir, 'last.pt')
@@ -259,8 +280,7 @@ def train(config, model):
             torch.save(model.state_dict(), best_ckpt_path)
             print(f"New best model saved to {best_ckpt_path}")
 
-    # Plot and save results after training is done
-    plot_results(history, os.path.join(run_dir, 'results.png'))
+    
 
 if __name__ == '__main__':
     config = {
@@ -270,5 +290,5 @@ if __name__ == '__main__':
         'epochs': 500,
         'learning_rate': 0.001
     }
-    train(config, YOLOBase)
+    train(config, YOLOMax)
 
