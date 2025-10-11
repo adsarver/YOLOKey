@@ -131,12 +131,6 @@ class DualDDetect(nn.Module):
         dbox2 = dist2bbox(self.dfl2(box2), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
         y = [torch.cat((dbox, cls.sigmoid()), 1), torch.cat((dbox2, cls2.sigmoid()), 1)]
         return y if self.export else (y, [d1, d2])
-        #y = torch.cat((dbox2, cls2.sigmoid()), 1)
-        #return y if self.export else (y, d2)
-        #y1 = torch.cat((dbox, cls.sigmoid()), 1)
-        #y2 = torch.cat((dbox2, cls2.sigmoid()), 1)
-        #return [y1, y2] if self.export else [(y1, d1), (y2, d2)]
-        #return [y1, y2] if self.export else [(y1, y2), (d1, d2)]
 
     def bias_init(self):
         # Initialize Detect() biases, WARNING: requires stride availability

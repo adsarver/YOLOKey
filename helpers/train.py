@@ -18,7 +18,7 @@ from models.YOLOMax import YOLOMax
 from helpers.loss import ComputeLoss
 from helpers.data import YoloDataset, yolo_collate_fn
 from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, non_max_suppression, output_to_target, process_batch, scale_boxes
-from utils.utils import xywh2xyxy, un_normalize_image, log_image_predictions
+from utils.utils import xywh2xyxy, un_normalize_image, log_random_image_predictions
 
 # --- Utility Functions ---
 def get_next_run_dir(base_dir='runs'):
@@ -237,7 +237,7 @@ def train(config, model, weights_path=None):
                 preds = non_max_suppression(preds[0], conf_thres=0.001, iou_thres=0.7, labels=data_config.get('labels'), multi_label=True, agnostic=False, max_det=100)
                 # Plot images
                 if (epoch+1 % 20 == 0 or epoch == 0) and len(stats) == 0:
-                    log_image_predictions(images[0].cpu(), targets[targets[:, 0] == 0][:, 1:].cpu(), preds[0], run_dir, epoch, names)
+                    log_random_image_predictions(model, val_loader, device, run_dir, epoch, data_config['names'])
                     
                 for si, pred in enumerate(preds):
                     labels = torch.Tensor(targets[targets[:, 0] == si, 1:]).to(device)  # labels for image si

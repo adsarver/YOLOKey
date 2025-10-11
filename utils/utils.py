@@ -7,6 +7,8 @@ from pathlib import Path
 from PIL import Image
 import torch.nn as nn
 import cv2
+from torchvision.utils import draw_bounding_boxes, save_image
+import random
 
 def un_normalize_image(tensor):
     """Reverses the normalization on an image tensor."""
@@ -27,58 +29,68 @@ def un_normalize_image(tensor):
     # Return a contiguous copy to avoid potential issues with OpenCV
     return img_uint8.copy()
 
-def log_image_predictions(image_tensor, targets, predictions, save_dir, epoch, class_names, conf_thres=0.3):
-    """
-    Saves an image with ground truth and prediction boxes drawn on it.
-
-    Args:
-        image_tensor (torch.Tensor): A single normalized image tensor (C, H, W).
-        targets (torch.Tensor): Ground truth labels for this image [class, x, y, w, h].
-        predictions (torch.Tensor): Predictions from the model after NMS [x1, y1, x2, y2, conf, class].
-        save_dir (str): Directory to save the image.
-        epoch (int): The current epoch number, for file naming.
-        class_names (list): List of class names for labeling boxes.
-        conf_thres (float): Confidence threshold to filter predictions.
-    """
-    # Un-normalize the image for display
-    img = un_normalize_image(image_tensor)
-    h, w, _ = img.shape
-
-    # --- Draw Ground Truth Boxes (in green) ---
-    if targets is not None and len(targets) > 0:
-        for t in targets:
-            class_id, x_center, y_center, box_w, box_h = t
-            
-            # Convert normalized xywh to pixel xyxy
-            x1 = int((x_center - box_w / 2) * w)
-            y1 = int((y_center - box_h / 2) * h)
-            x2 = int((x_center + box_w / 2) * w)
-            y2 = int((y_center + box_h / 2) * h)
-            
-            # Draw the box
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            # Put class name label
-            label = class_names[int(class_id)]
-            cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-    # --- Draw Prediction Boxes (in red) ---
-    if predictions is not None and len(predictions) > 0:
-        # Filter predictions by confidence threshold
-        predictions = predictions[predictions[:, 4] >= conf_thres]
+def log_random_image_predictions(model, val_loader, device, run_dir, epoch, class_names):
+    """Logs a random image with its ground truth and predicted bounding boxes."""
+    model.eval()
+    
+    # Get a single batch from the validation loader for visualization
+    try:
+        images, targets = next(iter(val_loader))
+    except StopIteration:
+        print("Validation loader is empty, cannot log image.")
+        return
         
-        for p in predictions:
-            x1, y1, x2, y2, conf, class_id = p
-            
-            # Draw the box
-            cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
-            # Put class name and confidence label
-            label = f'{class_names[int(class_id)]} {conf:.2f}'
-            cv2.putText(img, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+    images = images.to(device)
+    
+    with torch.no_grad():
+        inference_preds = model(images)[0][1]
+
+    # Select a random image from the batch
+    img_idx = random.randint(0, images.shape[0] - 1)
+    img_tensor = images[img_idx]
+    img_to_draw = un_normalize_image(img_to_draw)
+
+    # Convert image tensor to uint8 for drawing
+    img_h, img_w = img_tensor.shape[1:]
+
+    # --- Get and Format Ground Truth Boxes (Green) ---
+    gt_targets = targets[targets[:, 0] == img_idx, 1:]
+    gt_boxes = gt_targets[:, 1:]
+    # Denormalize
+    gt_boxes_denorm = gt_boxes.clone()
+    gt_boxes_denorm[:, 0] *= img_w
+    gt_boxes_denorm[:, 1] *= img_h
+    gt_boxes_denorm[:, 2] *= img_w
+    gt_boxes_denorm[:, 3] *= img_h
+    gt_boxes_xyxy = xywh2xyxy(gt_boxes_denorm)
+    gt_labels = [class_names[int(c)] for c in gt_targets[:, 0]]
+
+    # --- Get and Format Predicted Boxes (Blue) ---
+    preds_for_img = inference_preds[img_idx]
+    preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
+    
+    vis_conf_thres = 0.25 
+    conf, labels_idx = preds_for_img[:, 5:].max(1)
+    
+    keep_indices = conf > vis_conf_thres
+    
+    pred_boxes = preds_for_img[keep_indices, :4]
+    pred_boxes_xyxy = xywh2xyxy(pred_boxes)
+    pred_scores = conf[keep_indices]
+    pred_labels_idx = labels_idx[keep_indices]
+    
+    pred_labels = [f"{class_names[int(l)]} {s:.2f}" for l, s in zip(pred_labels_idx, pred_scores)]
+
+    # Draw boxes on the image
+    # Draw GT first, then predictions on the result
+    if gt_boxes_xyxy.shape[0] > 0:
+        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=gt_boxes_xyxy, labels=gt_labels, colors="green", width=2)
+    if pred_boxes_xyxy.shape[0] > 0:
+        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes_xyxy, labels=pred_labels, colors="blue", width=2)
 
     # Save the image
-    save_path = os.path.join(save_dir, f"epoch_{epoch+1}_predictions.png")
-    # Convert from RGB (matplotlib/PIL) to BGR (OpenCV) before saving
-    cv2.imwrite(save_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    save_path = os.path.join(run_dir, f"epoch_{epoch+1}_predictions.jpg")
+    save_image(img_to_draw / 255.0, save_path)
 
 def xyxy2xywh(x):
     # Convert nx4 boxes from [x1, y1, x2, y2] to [x, y, w, h] where xy1=top-left, xy2=bottom-right
