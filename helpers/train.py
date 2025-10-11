@@ -86,9 +86,32 @@ def plot_results(history, save_path):
     plt.savefig(save_path)
     plt.close()
     print(f"Results plot saved to {save_path}")
+    
+def load_weights(model, weights_path):
+    """Load model weights from a .pt file."""
+    if os.path.isfile(weights_path):
+        checkpoint = torch.load(weights_path, map_location='cpu', weights_only=False)
+        pretrained_weights = checkpoint['model'].float().state_dict()
+        custom_model_dict = model.state_dict()
+        mismatch = []
+        weights_to_load = {}
+        for name, param in pretrained_weights.items():
+            if name in custom_model_dict and param.shape == custom_model_dict[name].shape:
+                weights_to_load[name] = param
+            else:
+                mismatch.append((name, param.shape, custom_model_dict[name].shape if name in custom_model_dict else 'Not Found'))
+                pass
+
+        if mismatch:
+            print(f"Weights loading completed with {len(mismatch)} mismatches.")
+
+        model.load_state_dict(weights_to_load, strict=False)
+        print(f"Weights loaded from {weights_path}")
+    else:
+        print(f"No weights file found at {weights_path}, training from scratch.")
 
 # --- Main Training Function ---
-def train(config, model):
+def train(config, model, weights_path=None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
@@ -144,7 +167,12 @@ def train(config, model):
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=yolo_collate_fn, num_workers=4)
 
     # Model
-    model = model(nc=nc).to(device)
+    model = model(nc=nc)
+    
+    if weights_path:
+        load_weights(model, weights_path)
+    model.to(device)
+    
     optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
     compute_loss = ComputeLoss(model)
         
@@ -290,5 +318,5 @@ if __name__ == '__main__':
         'epochs': 500,
         'learning_rate': 0.001
     }
-    train(config, YOLOBase)
+    train(config, YOLOBase, 'yolov9-t-converted.pt')
 
