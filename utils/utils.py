@@ -10,48 +10,33 @@ import cv2
 from torchvision.utils import draw_bounding_boxes, save_image
 import random
 
-def un_normalize_image(tensor):
+def un_normalize_image(img):
     """Reverses the normalization on an image tensor."""
     # These are the standard ImageNet mean and std
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    
-    # Move tensor to CPU and convert to NumPy
-    img_np = tensor.cpu().numpy().transpose(1, 2, 0)
+    mean = torch.tensor([0.485, 0.456, 0.406], device=img.device).view(-1, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=img.device).view(-1, 1, 1)
     
     # Un-normalize
-    img_np = std * img_np + mean
-    img_np = np.clip(img_np, 0, 1)
+    img = img * std + mean
+    img = img.clamp(0, 1)
     
     # Convert to 8-bit unsigned integer format for image display
-    img_uint8 = (img_np * 255).astype(np.uint8)
+    img_uint8 = (img * 255).to(torch.uint8)
     
-    # Return a contiguous copy to avoid potential issues with OpenCV
-    return img_uint8.copy()
+    # img = img.permute(1, 2, 0)  # Change from CxHxW to HxWxC
+    
+    # Return a contiguous copy
+    return img_uint8.contiguous()
 
-def log_random_image_predictions(model, val_loader, device, run_dir, epoch, class_names):
+def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_names):
     """Logs a random image with its ground truth and predicted bounding boxes."""
-    model.eval()
-    
-    # Get a single batch from the validation loader for visualization
-    try:
-        images, targets = next(iter(val_loader))
-    except StopIteration:
-        print("Validation loader is empty, cannot log image.")
-        return
-        
-    images = images.to(device)
-    
-    with torch.no_grad():
-        inference_preds = model(images)[0][1]
-
     # Select a random image from the batch
     img_idx = random.randint(0, images.shape[0] - 1)
     img_tensor = images[img_idx]
-    img_to_draw = un_normalize_image(img_to_draw)
+    img_to_draw = un_normalize_image(img_tensor)
 
     # Convert image tensor to uint8 for drawing
-    img_h, img_w = img_tensor.shape[1:]
+    img_h, img_w = img_to_draw.shape[1:]
 
     # --- Get and Format Ground Truth Boxes (Green) ---
     gt_targets = targets[targets[:, 0] == img_idx, 1:]
@@ -66,7 +51,7 @@ def log_random_image_predictions(model, val_loader, device, run_dir, epoch, clas
     gt_labels = [class_names[int(c)] for c in gt_targets[:, 0]]
 
     # --- Get and Format Predicted Boxes (Blue) ---
-    preds_for_img = inference_preds[img_idx]
+    preds_for_img = preds[img_idx]
     preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
     
     vis_conf_thres = 0.25 
@@ -113,10 +98,6 @@ def xywh2xyxy(x):
 def is_parallel(model):
     # Returns True if model is of type DP or DDP
     return type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
-
-def de_parallel(model):
-    # De-parallelize a model: returns single-GPU model if model is of type DP or DDP
-    return model.module if is_parallel(model) else model
 
 def bbox2dist(anchor_points, bbox, reg_max):
     """Transform bbox(xyxy) to dist(ltrb)."""

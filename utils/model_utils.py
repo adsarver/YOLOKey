@@ -1,20 +1,12 @@
-import ast
-import contextlib
-import json
 import math
-import platform
 import warnings
-import zipfile
-from collections import OrderedDict, namedtuple
 from copy import copy
 from pathlib import Path
-
-import cv2
+import torch.nn.functional as F
 import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
-
 from utils.utils import colors
 
 meta = {
@@ -27,7 +19,7 @@ meta = {
     'anchor_t': (1, 2.0, 8.0),  # anchor-multiple threshold
     'anchors': (2, 2.0, 10.0),  # anchors per output grid (0 to ignore)
     'fl_gamma': 1.5,  # focal loss gamma (efficientDet default gamma=1.5)
-}  # segment copy-paste (probability)
+}
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     # Pad to 'same' shape outputs
@@ -36,6 +28,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
+
 
 def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
     """Transform distance(ltrb) to box(xywh or xyxy)."""
@@ -48,11 +41,13 @@ def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
         return torch.cat((c_xy, wh), dim)  # xywh bbox
     return torch.cat((x1y1, x2y2), dim)  # xyxy bbox
 
+
 def make_divisible(x, divisor):
     # Returns nearest x divisible by divisor
     if isinstance(divisor, torch.Tensor):
         divisor = int(divisor.max())  # to int
     return math.ceil(x / divisor) * divisor
+
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
     """Generate anchors from features."""
@@ -68,6 +63,7 @@ def make_anchors(feats, strides, grid_cell_offset=0.5):
         stride_tensor.append(torch.full((h * w, 1), stride, dtype=dtype, device=device))
     return torch.cat(anchor_points), torch.cat(stride_tensor)
 
+
 class DFL(nn.Module):
     # DFL module
     def __init__(self, c1=17):
@@ -81,6 +77,7 @@ class DFL(nn.Module):
         b, c, a = x.shape  # batch, channels, anchors
         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
+
 
 class DualDDetect(nn.Module):
     # YOLO Detect head for detection models
@@ -144,6 +141,7 @@ class DualDDetect(nn.Module):
             a[-1].bias.data[:] = 1.0  # box
             b[-1].bias.data[:m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (5 objects and 80 classes per 640 image)
 
+
 class Conv(nn.Module):
     # Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)
     default_act = nn.SiLU()  # default activation
@@ -169,7 +167,8 @@ class AConv(nn.Module):
     def forward(self, x):
         x = torch.nn.functional.avg_pool2d(x, 2, 1, 0, False, True)
         return self.cv1(x)
-    
+
+
 class MConv(nn.Module):
     def __init__(self, c1, c2):  # ch_in, ch_out, shortcut, kernels, groups, expand
         super().__init__()
@@ -512,7 +511,6 @@ class SPP(nn.Module):
 
         
 class ASPP(torch.nn.Module):
-
     def __init__(self, in_channels, out_channels):
         super().__init__()
         kernel_sizes = [1, 3, 3, 1]
@@ -586,10 +584,6 @@ class SPPF(nn.Module):
             y1 = self.m(x)
             y2 = self.m(y1)
             return self.cv2(torch.cat((x, y1, y2, self.m(y2)), 1))
-
-
-import torch.nn.functional as F
-from torch.nn.modules.utils import _pair
     
     
 class ReOrg(nn.Module):
@@ -655,8 +649,7 @@ class Silence(nn.Module):
         return x
 
 
-##### GELAN #####        
-        
+##### GELAN #####
 class SPPELAN(nn.Module):
     # spp-elan
     def __init__(self, c1, c2, c3):  # ch_in, ch_out, number, shortcut, groups, expansion
@@ -675,7 +668,6 @@ class SPPELAN(nn.Module):
         
         
 class ELAN1(nn.Module):
-
     def __init__(self, c1, c2, c3, c4):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = c3//2
@@ -715,11 +707,8 @@ class RepNCSPELAN4(nn.Module):
         y.extend(m(y[-1]) for m in [self.cv2, self.cv3])
         return self.cv4(torch.cat(y, 1))
 
-#################
-
 
 ##### YOLOR #####
-
 class ImplicitA(nn.Module):
     def __init__(self, channel):
         super(ImplicitA, self).__init__()
@@ -741,8 +730,8 @@ class ImplicitM(nn.Module):
     def forward(self, x):
         return self.implicit * x
 
-##### CBNet #####
 
+##### CBNet #####
 class CBLinear(nn.Module):
     def __init__(self, c1, c2s, k=1, s=1, p=None, g=1):  # ch_in, ch_outs, kernel, stride, padding, groups
         super(CBLinear, self).__init__()
@@ -764,8 +753,8 @@ class CBFuse(nn.Module):
         out = torch.sum(torch.stack(res + xs[-1:]), dim=0)
         return out
 
-#################
 
+#################
 class Detections:
     # YOLO detections class for inference results
     def __init__(self, ims, pred, files, times=(0, 0, 0), names=None, shape=None):

@@ -1,10 +1,9 @@
 import math
 import torch
 import torch.nn as nn
-from utils.model_utils import Conv, RepNCSPELAN4, MConv, SPPELAN, ELAN1, Concat, DualDDetect, meta
+from utils.model_utils import *
 
 # --- Main YOLOv9 Model ---
-
 class YOLOMax(nn.Module):
     """
     YOLOv9 model implemented in PyTorch based on 
@@ -12,6 +11,7 @@ class YOLOMax(nn.Module):
     """
     def __init__(self, nc, ch=3):
         super().__init__()
+        print(f"Building YOLOv9 Base model with {nc} classes")
         self.nc = nc
         self.hyp = meta  # Placeholder for hyperparameters if needed
 
@@ -49,12 +49,18 @@ class YOLOMax(nn.Module):
         self.h28 = RepNCSPELAN4(160, 64, 64, 32, 3)             # 28
 
         ch_detect = [64, 96, 128, 64, 96, 128]
-        self.h29 = DualDDetect(nc, ch=ch_detect)                # 29
+        self.detect = DualDDetect(nc, ch=ch_detect)             # 29
+        
+        s = 256  # 2x min stride
+        forward = lambda x: self.forward(x)[0]
+        self.detect.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
+        self.stride = self.detect.stride
+        self.detect.bias_init()  # only run once
         
         self.model = nn.ModuleList([
             self.b0, self.b1, self.b2, self.b3, self.b4, self.b5, self.b6, self.b7, self.b8, self.h9, # 0-9
             self.h10, self.h11, self.h12, self.h13, self.h14, self.h15, self.h16, self.h17, self.h18, self.h19, # 10-19
-            self.h20, self.h21, self.h22, self.h23, self.h24, self.h25, self.h26, self.h27, self.h28, self.h29 #20-29
+            self.h20, self.h21, self.h22, self.h23, self.h24, self.h25, self.h26, self.h27, self.h28, self.detect #20-29
         ])
 
     def forward(self, x):
@@ -89,5 +95,5 @@ class YOLOMax(nn.Module):
         x27 = self.h27([x26, x4]) # 27
         x28 = self.h28(x27) # 28
         
-        return self.h29([x28, x25, x22, x15, x18, x21]) # 38 (P3, P4, P5 for detection)
+        return self.detect([x28, x25, x22, x15, x18, x21]) # 38 (P3, P4, P5 for detection)
         

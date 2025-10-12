@@ -48,8 +48,7 @@ class YoloDataset(Dataset):
             with open(label_path, 'r') as f:
                 for line in f:
                     parts = line.strip().split()
-                    class_id = int(parts[0])
-                    
+
                     # Bbox format: [class_id, x_center, y_center, width, height]
                     bbox = [float(p) for p in parts[:5]]
                     
@@ -58,12 +57,6 @@ class YoloDataset(Dataset):
 
         if self.transform:
             img = self.transform(img)
-        else:
-            # Default transform: convert to tensor and normalize
-            img = torch.from_numpy(img.transpose(2, 0, 1)).float() / 255.0
-
-        # Adjust bounding boxes for resizing if needed (not necessary for normalized coords)
-        # In a real scenario, augmentations would also need to transform the bounding boxes.
 
         return img, labels
 

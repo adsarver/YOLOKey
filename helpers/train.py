@@ -94,16 +94,18 @@ def load_weights(model, weights_path):
         pretrained_weights = checkpoint['model'].float().state_dict()
         custom_model_dict = model.state_dict()
         mismatch = []
+        match = []
         weights_to_load = {}
         for name, param in pretrained_weights.items():
             if name in custom_model_dict and param.shape == custom_model_dict[name].shape:
                 weights_to_load[name] = param
+                match.append(name)
             else:
                 mismatch.append((name, param.shape, custom_model_dict[name].shape if name in custom_model_dict else 'Not Found'))
                 pass
 
         if mismatch:
-            print(f"Weights loading completed with {len(mismatch)} mismatches.")
+            print(f"Weights loading completed with {len(match)} matches and {len(mismatch)} mismatches.")
 
         model.load_state_dict(weights_to_load, strict=False)
         print(f"Weights loaded from {weights_path}")
@@ -135,9 +137,9 @@ def train(config, model, weights_path=None):
     niou = iouv.numel()
     
     # --- Data Augmentation ---
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
     trtransforms = v2.Compose([
         v2.ToImage(),  # Convert to tensor, only needed if you had a PIL image
         v2.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
@@ -209,8 +211,8 @@ def train(config, model, weights_path=None):
             pbar_train.set_postfix({
             'Loss': f"{loss.item():.4f}",
             'Box': f"{components[0]:.4f}",
-            'Obj': f"{components[1]:.4f}",
-            'Cls': f"{components[2]:.4f}",
+            'Cls': f"{components[1]:.4f}",
+            'Dfl': f"{components[2]:.4f}",
             'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
         })
         
@@ -236,9 +238,9 @@ def train(config, model, weights_path=None):
                 
                 preds = non_max_suppression(preds[0], conf_thres=0.001, iou_thres=0.7, labels=data_config.get('labels'), multi_label=True, agnostic=False, max_det=100)
                 # Plot images
-                if (epoch+1 % 20 == 0 or epoch == 0) and len(stats) == 0:
-                    log_random_image_predictions(model, val_loader, device, run_dir, epoch, data_config['names'])
-                    
+                if (epoch+1 % 1 == 0 or epoch == 0) and len(stats) == 0:
+                    log_random_image_predictions(images, targets, preds, run_dir, epoch, data_config['names'])
+
                 for si, pred in enumerate(preds):
                     labels = torch.Tensor(targets[targets[:, 0] == si, 1:]).to(device)  # labels for image si
                     nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
@@ -265,11 +267,11 @@ def train(config, model, weights_path=None):
                 pbar_val.set_postfix({
                     'Loss': f"{loss.item():.4f}",
                     'Box': f"{components[0]:.4f}",
-                    'Obj': f"{components[1]:.4f}",
-                    'Cls': f"{components[2]:.4f}",
+                    'Cls': f"{components[1]:.4f}",
+                    'Dfl': f"{components[2]:.4f}",
                     'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
-                })                       
-         
+                })
+        
         avg_val_loss = val_loss / len(val_loader)
         
         # Compute metrics
@@ -316,7 +318,7 @@ if __name__ == '__main__':
         'img_size': 128,
         'batch_size': 64,
         'epochs': 500,
-        'learning_rate': 0.001
+        'learning_rate': 0.005
     }
-    train(config, YOLOBase, 'yolov9-t-converted.pt')
+    train(config, YOLOMax, 'yolov9-t-converted.pt')
 
