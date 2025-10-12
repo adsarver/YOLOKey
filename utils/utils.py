@@ -54,7 +54,7 @@ def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_n
     preds_for_img = preds[img_idx]
     preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
     
-    vis_conf_thres = 0.25 
+    vis_conf_thres = 0.5 
     conf, labels_idx = preds_for_img[:, 5:].max(1)
     
     keep_indices = conf > vis_conf_thres
