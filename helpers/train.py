@@ -113,9 +113,8 @@ def load_weights(model, weights_path):
         print(f"No weights file found at {weights_path}, training from scratch.")
 
 # --- Main Training Function ---
-def train(config, model, weights_path=None, device=None):
-    if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def train(config, model, weights_path=None, cpus=4):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
     print(f"Using device: {device}")
 
@@ -162,13 +161,13 @@ def train(config, model, weights_path=None, device=None):
     train_img_dir = train_img_dir.replace('../', '')
     train_label_dir = train_img_dir.replace('images', 'labels')
     train_dataset = YoloDataset(img_dir=train_img_dir, label_dir=train_label_dir, img_size=img_size, transform=trtransforms)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=yolo_collate_fn, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=yolo_collate_fn, num_workers=cpus)
 
     val_img_dir = os.path.join(os.path.dirname(data_yaml_path), data_config['val'])
     val_img_dir = val_img_dir.replace('../', '')
     val_label_dir = val_img_dir.replace('images', 'labels')
     val_dataset = YoloDataset(img_dir=val_img_dir, label_dir=val_label_dir, img_size=img_size, transform=valtransforms)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=yolo_collate_fn, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, collate_fn=yolo_collate_fn, num_workers=cpus)
 
     # Model
     model = model(nc=nc)
