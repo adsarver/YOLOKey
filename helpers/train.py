@@ -113,8 +113,10 @@ def load_weights(model, weights_path):
         print(f"No weights file found at {weights_path}, training from scratch.")
 
 # --- Main Training Function ---
-def train(config, model, weights_path=None):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+def train(config, model, weights_path=None, device=None):
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
     print(f"Using device: {device}")
 
     # Create run directory
@@ -238,7 +240,7 @@ def train(config, model, weights_path=None):
                 
                 preds = non_max_suppression(preds[0], conf_thres=0.001, iou_thres=0.7, labels=data_config.get('labels'), multi_label=True, agnostic=False, max_det=100)
                 # Plot images
-                if (epoch+1 % 1 == 0 or epoch == 0) and len(stats) == 0:
+                if ((epoch+1) % 1 == 0 or epoch == 0) and len(stats) == 0:
                     log_random_image_predictions(images, targets, preds, run_dir, epoch, data_config['names'])
 
                 for si, pred in enumerate(preds):
