@@ -27,8 +27,19 @@ class YoloDataset(Dataset):
 
         # Find all image files and filter out any that don't have corresponding labels
         self.image_files = sorted(glob(os.path.join(self.img_dir, '*.*')))
-        self.image_files = [img for img in self.image_files if os.path.exists(self._get_label_path(img))]
+        self.image_files = [img for img in self.image_files if os.path.exists(self._get_label_path(img))][:200]
+        invalid = []
 
+        for img in self.image_files:
+            label_path = self._get_label_path(img)
+            with open(label_path, 'r') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) != 5:
+                        invalid.append(img)
+                        break
+        self.image_files = [img for img in self.image_files if img not in invalid]
+        print(f"Total valid images found: {len(self.image_files)}")
 
     def __len__(self):
         return len(self.image_files)
@@ -48,7 +59,8 @@ class YoloDataset(Dataset):
             with open(label_path, 'r') as f:
                 for line in f:
                     parts = line.strip().split()
-
+                    if len(parts) != 5:
+                        print(f"Warning: Invalid label format in file {label_path}. Each line should have 5 values.")
                     # Bbox format: [class_id, x_center, y_center, width, height]
                     bbox = [float(p) for p in parts[:5]]
                     

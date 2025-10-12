@@ -52,15 +52,13 @@ def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_n
 
     # --- Get and Format Predicted Boxes (Blue) ---
     preds_for_img = preds[img_idx]
-    preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
-    
-    vis_conf_thres = 0.5 
-    conf, labels_idx = preds_for_img[:, 5:].max(1)
-    
+    # preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
+    vis_conf_thres = 0.5
+    labels_idx, conf = preds_for_img[:, 5:].max(1)
+    print(conf, labels_idx)
     keep_indices = conf > vis_conf_thres
     
     pred_boxes = preds_for_img[keep_indices, :4]
-    pred_boxes_xyxy = xywh2xyxy(pred_boxes)
     pred_scores = conf[keep_indices]
     pred_labels_idx = labels_idx[keep_indices]
     
@@ -70,8 +68,8 @@ def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_n
     # Draw GT first, then predictions on the result
     if gt_boxes_xyxy.shape[0] > 0:
         img_to_draw = draw_bounding_boxes(img_to_draw, boxes=gt_boxes_xyxy, labels=gt_labels, colors="green", width=2)
-    if pred_boxes_xyxy.shape[0] > 0:
-        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes_xyxy, labels=pred_labels, colors="blue", width=2)
+    if pred_boxes.shape[0] > 0:
+        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes, labels=pred_labels, colors="blue", width=2)
 
     # Save the image
     save_path = os.path.join(run_dir, f"epoch_{epoch+1}_predictions.jpg")

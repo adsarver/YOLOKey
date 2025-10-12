@@ -237,10 +237,10 @@ def train(config, model, weights_path=None, cpus=4):
                 loss, components = compute_loss(preds, targets)
                 val_loss += loss.item()
                 
-                preds = non_max_suppression(preds[0], conf_thres=0.001, iou_thres=0.7, labels=data_config.get('labels'), multi_label=True, agnostic=False, max_det=100)
+                preds = non_max_suppression(preds[0], labels=data_config.get('labels'), multi_label=True, agnostic=False)
                 # Plot images
                 if ((epoch+1) % 1 == 0 or epoch == 0) and len(stats) == 0:
-                    log_random_image_predictions(images, targets, preds, run_dir, epoch, data_config['names'])
+                    log_random_image_predictions(images.clone(), targets.clone(), preds.copy(), run_dir, epoch, data_config['names'])
 
                 for si, pred in enumerate(preds):
                     labels = torch.Tensor(targets[targets[:, 0] == si, 1:]).to(device)  # labels for image si
@@ -275,7 +275,6 @@ def train(config, model, weights_path=None, cpus=4):
         
         # Compute metrics
         stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)] # Compile stats
-        print([x for x in stats if x.any()])
         if len(stats) and len([x for x in stats if x.any()]):
             tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=True, save_dir=run_dir, names=names)
             ap50, ap = ap[:, 0], ap.mean(1) # AP@0.5, AP@0.5:0.95
@@ -314,9 +313,9 @@ def train(config, model, weights_path=None, cpus=4):
 
 if __name__ == '__main__':
     config = {
-        'data_yaml': 'dataset128/data.yaml',
-        'img_size': 128,
-        'batch_size': 64,
+        'data_yaml': 'dataset/data.yaml',
+        'img_size': 640,
+        'batch_size': 16,
         'epochs': 500,
         'learning_rate': 0.005
     }
