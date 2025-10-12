@@ -249,20 +249,18 @@ def train(config, model, weights_path=None, cpus=4):
                     correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
 
                     if npr == 0:
-                        if nl:
-                            stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
-                            confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
+                        stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+                        confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
                         continue
 
                     # Predictions
                     predn = pred.clone()
 
                     # Evaluate
-                    if nl:
-                        tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
-                        labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
-                        correct = process_batch(predn, labelsn, iouv)
-                        confusion_matrix.process_batch(predn, labelsn)
+                    tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                    labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+                    correct = process_batch(predn, labelsn, iouv)
+                    confusion_matrix.process_batch(predn, labelsn)
                     stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
 
                 pbar_val.set_postfix({
@@ -277,6 +275,7 @@ def train(config, model, weights_path=None, cpus=4):
         
         # Compute metrics
         stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)] # Compile stats
+        print([x for x in stats if x.any()])
         if len(stats) and len([x for x in stats if x.any()]):
             tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=True, save_dir=run_dir, names=names)
             ap50, ap = ap[:, 0], ap.mean(1) # AP@0.5, AP@0.5:0.95
