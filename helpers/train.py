@@ -74,7 +74,7 @@ def plot_results(history, save_path):
     axs[0, 3].legend()
     axs[0, 3].grid(True)
     
-    axs[1, 0].plot(epochs, history['map_0.5:0.95'], 'co-', label='mAP@.50:.95')
+    axs[1, 0].plot(epochs, history['map95'], 'co-', label='mAP@.50:.95')
     axs[1, 0].set_title('mAP@.50-.95 (Primary Metric)')
     axs[1, 0].grid(True)
     
@@ -322,7 +322,8 @@ def train(config, model, weights_path=None, cpus=4):
         
         # Compute and log metrics
         print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-        print(f"          mAP@.5: {map50:.4f}, mAP@.5:.95: {mean_ap:.4f}, Precision: {mp:.4f}, Recall: {mr:.4f}")
+        print(f"          mAP50: {map50:.4f}, mAP95: {mean_ap:.4f}")
+        print(f"          Precision: {mp:.4f}, Recall: {mr:.4f}, F1: {mf1:.4f}")
 
 
         # Update history
@@ -349,7 +350,7 @@ def train(config, model, weights_path=None, cpus=4):
         last_ckpt_path = os.path.join(run_dir, 'weights', 'last.pt')
         torch.save(model.state_dict(), last_ckpt_path)
 
-        if mf1 < best_val_f1:
+        if mf1 > best_val_f1:
             since_improved = 0
             best_val_f1 = mf1
             best_ckpt_path = os.path.join(run_dir, 'weights', f'best_epoch_{epoch+1}.pt')
