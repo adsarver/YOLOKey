@@ -230,6 +230,7 @@ def train(config, model, weights_path=None, cpus=4):
         pbar_val = tqdm(val_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Validation]")
         with torch.no_grad():
             for images, targets in pbar_val:
+                nb, _, height, width = images.shape
                 images = images.to(device)
                 targets = targets.to(device)
                 
@@ -237,32 +238,39 @@ def train(config, model, weights_path=None, cpus=4):
                 loss, components = compute_loss(preds, targets)
                 val_loss += loss.item()
                 
-                preds = non_max_suppression(preds[0], labels=data_config.get('labels'), multi_label=True, agnostic=False)
+                targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
+                lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)]  # for autolabelling
+                
+                preds = non_max_suppression(preds[0][1], labels=[], multi_label=True, agnostic=False)
                 # Plot images
                 if ((epoch+1) % 1 == 0 or epoch == 0) and len(stats) == 0:
                     log_random_image_predictions(images.clone(), targets.clone(), preds.copy(), run_dir, epoch, data_config['names'])
 
                 for si, pred in enumerate(preds):
-                    labels = torch.Tensor(targets[targets[:, 0] == si, 1:]).to(device)  # labels for image si
+                    labels = targets[targets[:, 0] == si, 1:]
                     nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
-                    # path, shape = Path(paths[si]), shapes[si][0]
+                    shape = (img_size, img_size)  # for scaling boxes
                     correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
 
                     if npr == 0:
-                        stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
-                        confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
+                        if nl:
+                            stats.append((correct, *torch.zeros((2, 0), device=device), labels[:, 0]))
+                            confusion_matrix.process_batch(detections=None, labels=labels[:, 0])
                         continue
 
                     # Predictions
                     predn = pred.clone()
+                    scale_boxes(images[si].shape[1:], predn[:, :4], shape)  # native-space pred
 
                     # Evaluate
-                    tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
-                    labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
-                    correct = process_batch(predn, labelsn, iouv)
-                    confusion_matrix.process_batch(predn, labelsn)
+                    if nl:
+                        tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                        scale_boxes(images[si].shape[1:], tbox, shape)  # native-space labels
+                        labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+                        correct = process_batch(predn, labelsn, iouv)
+                        confusion_matrix.process_batch(predn, labelsn)
                     stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
-
+                    
                 pbar_val.set_postfix({
                     'Loss': f"{loss.item():.4f}",
                     'Box': f"{components[0]:.4f}",
@@ -286,7 +294,7 @@ def train(config, model, weights_path=None, cpus=4):
         
         # Compute and log metrics
         print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-        print(f"          mAP@.5: {map50:.4f}, mAP@.5:.95: {mean_ap:.4f}, Precision: {mp:.4f}, Recall: {mr:.4f}")
+        print(f"         mAP@.5: {map50:.4f}, mAP@.5:.95: {mean_ap:.4f}, Precision: {mp:.4f}, Recall: {mr:.4f}")
 
         # Update history
         history['train_loss'].append(avg_train_loss)
@@ -296,8 +304,10 @@ def train(config, model, weights_path=None, cpus=4):
         history['f1'].append(mf1)
         history['map_0.5'].append(map50)
         history['map_0.5:0.95'].append(mean_ap)
+        
         # Plot and save results after training is done
         plot_results(history, os.path.join(run_dir, 'results.png'))
+        confusion_matrix.plot(save_dir=run_dir, names=list(names.values()))
 
         # Save checkpoints
         last_ckpt_path = os.path.join(run_dir, 'last.pt')

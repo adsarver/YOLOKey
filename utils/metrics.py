@@ -2,7 +2,7 @@ import time
 import math
 import warnings
 from pathlib import Path
-
+import seaborn as sn
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -351,8 +351,6 @@ class ConfusionMatrix:
         return tp[:-1], fp[:-1]  # remove background class
 
     def plot(self, normalize=True, save_dir='', names=()):
-        import seaborn as sn
-
         array = self.matrix / ((self.matrix.sum(0).reshape(1, -1) + 1E-9) if normalize else 1)  # normalize columns
         array[array < 0.005] = np.nan  # don't annotate (would appear as 0.00)
 
@@ -517,8 +515,6 @@ def wh_iou(wh1, wh2, eps=1e-7):
 
 
 # Plots ----------------------------------------------------------------------------------------------------------------
-
-
 def plot_pr_curve(px, py, ap, save_dir=Path('pr_curve.png'), names=()):
     # Precision-recall curve
     fig, ax = plt.subplots(1, 1, figsize=(9, 6), tight_layout=True)
@@ -539,7 +535,6 @@ def plot_pr_curve(px, py, ap, save_dir=Path('pr_curve.png'), names=()):
     ax.set_title('Precision-Recall Curve')
     fig.savefig(save_dir, dpi=250)
     plt.close(fig)
-
 
 def plot_mc_curve(px, py, save_dir=Path('mc_curve.png'), names=(), xlabel='Confidence', ylabel='Metric'):
     # Metric-confidence curve
