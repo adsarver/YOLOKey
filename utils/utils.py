@@ -42,6 +42,13 @@ def un_normalize_image(img):
 @threaded
 def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_names, scale_factor=3):
     """Logs a random image with its ground truth and predicted bounding boxes."""
+    font = None
+    import matplotlib.font_manager as fm
+    for font in fm.findSystemFonts(fontpaths=['/usr/share/fonts/truetype/']):
+        if 'Serif-Regular' in font:
+            font = font
+            break
+        
     # Select a random image from the batch
     img_idx = random.randint(0, images.shape[0] - 1)
     img_tensor = images[img_idx]
@@ -89,7 +96,7 @@ def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_n
             colors="green", 
             width=2*scale_factor, 
             font_size=10*scale_factor, 
-            font="/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
+            font=font
         )
 
     # Save the image
