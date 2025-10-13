@@ -152,13 +152,17 @@ def train(config, model, weights_path=None, cpus=4):
     trtransforms = v2.Compose([
         v2.ToImage(),  # Convert to tensor, only needed if you had a PIL image
         v2.ToDtype(torch.uint8, scale=True),  # optional, most input are already uint8 at this point
-        v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.3, hue=0.2),
-        v2.RandomErasing(scale=(0.02, 0.33), ratio=(0.3, 3.3), value=1, inplace=False),
+        v2.RandomApply([
+            v2.RandomAffine(degrees=10, translate=(0.1, 0.1), scale=(0.8, 1.2)),
+            v2.RandomPerspective(distortion_scale=0.2, p=0.5),
+        ], p=0.5),
+        v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.2),
+        v2.RandomErasing(scale=(0.02, 0.33), ratio=(0.3, 3.3)),
         v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
         v2.Normalize(mean=mean, std=std),
     ])
 
-    valtransforms = v2.Compose([
+    valtransforms = v2.Compose([ 
         v2.ToImage(),
         v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
         v2.Normalize(mean=mean, std=std),
