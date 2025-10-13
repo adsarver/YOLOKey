@@ -200,15 +200,15 @@ def train(config, model, weights_path=None, cpus=4):
         'precision': [], 
         'recall': [], 
         'f1': [], 
-        'map_0.5': [], 
-        'map_0.5:0.95': [],
+        'map50': [], 
+        'map95': [],
     }
 
     best_val_f1 = 0.0
+    since_improved = 0
 
     # Training Loop
     for epoch in range(config['epochs']):
-        since_improved = 0
         model.train()
         train_loss = [0, 0, 0, 0]
         pbar_train = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Training]")
@@ -338,10 +338,10 @@ def train(config, model, weights_path=None, cpus=4):
         history['precision'].append(mp)
         history['recall'].append(mr)
         history['f1'].append(mf1)
-        history['map_0.5'].append(map50)
-        history['map_0.5:0.95'].append(mean_ap)
-        
-        
+        history['map50'].append(map50)
+        history['map95'].append(mean_ap)
+
+
         # Plot and save results after training is done
         plot_results(history, os.path.join(run_dir, 'results.png'))
         confusion_matrix.plot(save_dir=run_dir, names=list(names.values()))
@@ -359,9 +359,9 @@ def train(config, model, weights_path=None, cpus=4):
         else:
             since_improved += 1
 
-            if since_improved >= 20 and epoch+1 > 20:
-                print(f"No improvement for {since_improved} epochs. Early stopping.")
-                break
+        if since_improved >= config.get('early_stopping', 20) and epoch+1 > 20:
+            print(f"No improvement for {since_improved} epochs. Early stopping.")
+            break
     
 
 if __name__ == '__main__':
