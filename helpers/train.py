@@ -90,16 +90,6 @@ def plot_results(history, save_path):
     axs[1, 3].set_title('F1 Score')
     axs[1, 3].grid(True)
 
-    history = {
-        'train_loss': [], 
-        'val_loss': [], 
-        'precision': [], 
-        'recall': [], 
-        'f1': [], 
-        'map_0.5': [], 
-        'map_0.5:0.95': [],
-    }
-
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(save_path)
     plt.close()
@@ -237,14 +227,14 @@ def train(config, model, weights_path=None, cpus=4):
             train_loss[3] += components[2].item()
 
             pbar_train.set_postfix({
-            'Loss': f"{loss.item():.4f}",
+            'Loss': f"{loss.item() / batch_size:.4f}",
             'Box': f"{components[0]:.4f}",
             'Cls': f"{components[1]:.4f}",
             'Dfl': f"{components[2]:.4f}",
             'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
         })
         
-        avg_train_loss = train_loss[0] / (2*batch_size)
+        avg_train_loss = train_loss[0] / (batch_size * len(train_loader))
         
         # Validation Loop
         model.eval()
@@ -309,14 +299,14 @@ def train(config, model, weights_path=None, cpus=4):
                     stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
                     
                 pbar_val.set_postfix({
-                    'Loss': f"{loss.item():.4f}",
+                    'Loss': f"{loss.item() / batch_size:.4f}",
                     'Box': f"{components[0]:.4f}",
                     'Cls': f"{components[1]:.4f}",
                     'Dfl': f"{components[2]:.4f}",
                     'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
                 })
         
-        avg_val_loss = val_loss[0] / (2*batch_size)
+        avg_val_loss = val_loss[0] / (batch_size * len(val_loader))
         
         # Compute metrics
         stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)] # Compile stats
@@ -337,12 +327,12 @@ def train(config, model, weights_path=None, cpus=4):
         # Update history
         history['train_loss'].append(avg_train_loss)
         history['val_loss'].append(avg_val_loss)
-        history['train_box_loss'].append(train_loss[1])
-        history['val_box_loss'].append(val_loss[1])
-        history['train_cls_loss'].append(train_loss[2])
-        history['val_cls_loss'].append(val_loss[2])
-        history['train_dfl_loss'].append(train_loss[3])
-        history['val_dfl_loss'].append(val_loss[3])
+        history['train_box_loss'].append(train_loss[1] / len(train_loader))
+        history['val_box_loss'].append(val_loss[1] / len(val_loader))
+        history['train_cls_loss'].append(train_loss[2] / len(train_loader))
+        history['val_cls_loss'].append(val_loss[2] / len(val_loader))
+        history['train_dfl_loss'].append(train_loss[3] / len(train_loader))
+        history['val_dfl_loss'].append(val_loss[3] / len(val_loader))
         history['precision'].append(mp)
         history['recall'].append(mr)
         history['f1'].append(mf1)
