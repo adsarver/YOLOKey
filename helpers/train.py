@@ -208,6 +208,7 @@ def train(config, model, weights_path=None, cpus=4):
 
     # Training Loop
     for epoch in range(config['epochs']):
+        since_improved = 0
         model.train()
         train_loss = [0, 0, 0, 0]
         pbar_train = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Training]")
@@ -349,10 +350,17 @@ def train(config, model, weights_path=None, cpus=4):
         torch.save(model.state_dict(), last_ckpt_path)
 
         if avg_val_loss < best_val_loss:
+            since_improved = 0
             best_val_loss = avg_val_loss
-            best_ckpt_path = os.path.join(run_dir, 'weights', 'best.pt')
+            best_ckpt_path = os.path.join(run_dir, 'weights', f'best_epoch_{epoch}.pt')
             torch.save(model.state_dict(), best_ckpt_path)
             print(f"New best model saved to {best_ckpt_path}")
+        else:
+            since_improved += 1
+
+            if since_improved >= 20 and epoch > 20:
+                print(f"No improvement for {since_improved} epochs. Early stopping.")
+                break
 
     
 
