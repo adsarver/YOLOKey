@@ -10,6 +10,7 @@ import cv2
 from torchvision.utils import draw_bounding_boxes, save_image
 import random
 import threading
+import torch.nn.functional as F
 
 def threaded(func):
     # Multi-threads a target function and returns thread. Usage: @threaded decorator
@@ -39,30 +40,39 @@ def un_normalize_image(img):
     return img_uint8.contiguous()
 
 @threaded
-def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_names):
+def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_names, scale_factor=3):
     """Logs a random image with its ground truth and predicted bounding boxes."""
     # Select a random image from the batch
     img_idx = random.randint(0, images.shape[0] - 1)
     img_tensor = images[img_idx]
     img_to_draw = un_normalize_image(img_tensor)
-
-    # Convert image tensor to uint8 for drawing
+    
     img_h, img_w = img_to_draw.shape[1:]
+
+    # Note: F.interpolate works on float tensors, so we convert and then convert back
+    high_res_img = F.interpolate(
+        img_to_draw.unsqueeze(0).float(),
+        size=(img_h * scale_factor, img_w * scale_factor),
+        mode='bilinear', 
+        align_corners=False
+    ).squeeze(0).to(torch.uint8)
+    # Convert image tensor to uint8 for drawing
+    img_h, img_w = high_res_img.shape[1:]
 
     # --- Get and Format Ground Truth Boxes (Green) ----
     gt_targets = targets[targets[:, 0] == img_idx, 1:]
     gt_boxes = gt_targets[:, 1:]
-    gt_boxes_xyxy = xywh2xyxy(gt_boxes)
+    gt_boxes_xyxy = xywh2xyxy(gt_boxes) * scale_factor
     gt_labels = [class_names[int(c)] for c in gt_targets[:, 0]]
 
     # --- Get and Format Predicted Boxes (Blue) ---
     preds_for_img = preds[img_idx]
-    # preds_for_img[:, 5:] *= preds_for_img[:, 4:5]  # conf = obj_conf * cls_conf
     vis_conf_thres = 0.5
-    conf, labels_idx = preds_for_img[:, 5:].max(1)
+    conf = preds_for_img[:, 4]
+    labels_idx = preds_for_img[:, 5]
     keep_indices = conf > vis_conf_thres
     
-    pred_boxes = preds_for_img[keep_indices, :4]
+    pred_boxes = preds_for_img[keep_indices, :4] * scale_factor
     pred_scores = conf[keep_indices]
     pred_labels_idx = labels_idx[keep_indices]
     pred_labels = [f"{class_names[int(l)]} {s:.2f}" for l, s in zip(pred_labels_idx, pred_scores)]
@@ -70,9 +80,17 @@ def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_n
     # Draw boxes on the image
     # Draw GT first, then predictions on the result
     # if gt_boxes_xyxy.shape[0] > 0:
-    #     img_to_draw = draw_bounding_boxes(img_to_draw, boxes=gt_boxes_xyxy, labels=gt_labels, colors="green", width=2)
+    #     img_to_draw = draw_bounding_boxes(high_res_img, boxes=gt_boxes_xyxy, labels=gt_labels, colors="green", width=2)
     if pred_boxes.shape[0] > 0:
-        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes, labels=pred_labels, colors="blue", width=2)
+        img_to_draw = draw_bounding_boxes(
+            high_res_img, 
+            boxes=pred_boxes, 
+            labels=pred_labels, 
+            colors="green", 
+            width=2*scale_factor, 
+            font_size=10*scale_factor, 
+            font="/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"
+        )
 
     # Save the image
     save_path = os.path.join(run_dir, f"epoch_{epoch+1}_predictions.jpg")

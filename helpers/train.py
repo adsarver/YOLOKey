@@ -39,6 +39,10 @@ def get_next_run_dir(base_dir='runs'):
                 continue
         run_dir = os.path.join(base_dir, f'run_{max_run_num + 1}')
     os.makedirs(run_dir)
+    if not os.path.exists(os.path.join(run_dir, 'predictions')):
+        os.makedirs(os.path.join(run_dir, 'predictions'))
+    if not os.path.exists(os.path.join(run_dir, 'weights')):
+        os.makedirs(os.path.join(run_dir, 'weights'))
     return run_dir
 
 def plot_results(history, save_path):
@@ -234,17 +238,24 @@ def train(config, model, weights_path=None, cpus=4):
                 images = images.to(device)
                 targets = targets.to(device)
                 
-                preds = model(images)
-                loss, components = compute_loss(preds, targets)
+                preds, train_out = model(images)
+                loss, components = compute_loss(train_out, targets)
                 val_loss += loss.item()
                 
                 targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
                 lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)]  # for autolabelling
                 
-                preds = non_max_suppression(preds[0][1], labels=[], multi_label=True, agnostic=False)
+                preds = non_max_suppression(preds[0], labels=[], conf_thres=0.001 if epoch < 5 else 0.25, multi_label=True, agnostic=False)
                 # Plot images
-                if ((epoch+1) % 1 == 0 or epoch == 0) and len(stats) == 0:
-                    log_random_image_predictions(images.clone(), targets.clone(), preds.copy(), run_dir, epoch, data_config['names'])
+                if ((epoch+1) % 5 == 0 or epoch == 0) and len(stats) == 0:
+                    log_random_image_predictions(
+                        images.clone(), 
+                        targets.clone(), 
+                        preds.copy(), 
+                        os.path.join(run_dir, f"predictions"), 
+                        epoch, 
+                        data_config['names']
+                    )
 
                 for si, pred in enumerate(preds):
                     labels = targets[targets[:, 0] == si, 1:]
@@ -294,7 +305,8 @@ def train(config, model, weights_path=None, cpus=4):
         
         # Compute and log metrics
         print(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-        print(f"         mAP@.5: {map50:.4f}, mAP@.5:.95: {mean_ap:.4f}, Precision: {mp:.4f}, Recall: {mr:.4f}")
+        print(f"          mAP@.5: {map50:.4f}, mAP@.5:.95: {mean_ap:.4f}, Precision: {mp:.4f}, Recall: {mr:.4f}")
+
 
         # Update history
         history['train_loss'].append(avg_train_loss)
@@ -305,17 +317,18 @@ def train(config, model, weights_path=None, cpus=4):
         history['map_0.5'].append(map50)
         history['map_0.5:0.95'].append(mean_ap)
         
+        
         # Plot and save results after training is done
         plot_results(history, os.path.join(run_dir, 'results.png'))
         confusion_matrix.plot(save_dir=run_dir, names=list(names.values()))
 
         # Save checkpoints
-        last_ckpt_path = os.path.join(run_dir, 'last.pt')
+        last_ckpt_path = os.path.join(run_dir, 'weights', 'last.pt')
         torch.save(model.state_dict(), last_ckpt_path)
 
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            best_ckpt_path = os.path.join(run_dir, 'best.pt')
+            best_ckpt_path = os.path.join(run_dir, 'weights', 'best.pt')
             torch.save(model.state_dict(), best_ckpt_path)
             print(f"New best model saved to {best_ckpt_path}")
 
@@ -327,7 +340,7 @@ if __name__ == '__main__':
         'img_size': 640,
         'batch_size': 16,
         'epochs': 500,
-        'learning_rate': 0.005
+        'learning_rate': 0.001
     }
     train(config, YOLOMax, 'yolov9-t-converted.pt')
 
