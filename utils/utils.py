@@ -72,7 +72,7 @@ def log_random_image_predictions(images, targets, preds, run_dir, epoch, class_n
     # if gt_boxes_xyxy.shape[0] > 0:
     #     img_to_draw = draw_bounding_boxes(img_to_draw, boxes=gt_boxes_xyxy, labels=gt_labels, colors="green", width=2)
     if pred_boxes.shape[0] > 0:
-        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes, labels=pred_labels, colors="blue", width=2, font_size=15, font="arial.ttf")
+        img_to_draw = draw_bounding_boxes(img_to_draw, boxes=pred_boxes, labels=pred_labels, colors="blue", width=2)
 
     # Save the image
     save_path = os.path.join(run_dir, f"epoch_{epoch+1}_predictions.jpg")
