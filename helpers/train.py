@@ -52,13 +52,27 @@ def plot_results(history, save_path):
 
     axs[0, 0].plot(epochs, history['train_loss'], 'bo-', label='Training Loss')
     axs[0, 0].plot(epochs, history['val_loss'], 'ro-', label='Validation Loss')
-    axs[0, 0].set_title('Loss')
+    axs[0, 0].set_title('Total Loss')
     axs[0, 0].legend()
     axs[0, 0].grid(True)
-
-    axs[0, 1].plot(epochs, history['map_0.5'], 'mo-', label='mAP@.50')
-    axs[0, 1].set_title('mAP@.50')
+    
+    axs[0, 1].plot(epochs, history['train_box_loss'], 'bo-', label='Training Box Loss')
+    axs[0, 1].plot(epochs, history['val_box_loss'], 'ro-', label='Validation Box Loss')
+    axs[0, 1].set_title('Box Loss')
+    axs[0, 1].legend()
     axs[0, 1].grid(True)
+
+    axs[0, 2].plot(epochs, history['train_cls_loss'], 'bo-', label='Training Cls Loss')
+    axs[0, 2].plot(epochs, history['val_cls_loss'], 'ro-', label='Validation Cls Loss')
+    axs[0, 2].set_title('Cls Loss')
+    axs[0, 2].legend()
+    axs[0, 2].grid(True)
+
+    axs[0, 3].plot(epochs, history['train_dfl_loss'], 'bo-', label='Training DFL Loss')
+    axs[0, 3].plot(epochs, history['val_dfl_loss'], 'ro-', label='Validation DFL Loss')
+    axs[0, 3].set_title('DFL Loss')
+    axs[0, 3].legend()
+    axs[0, 3].grid(True)
     
     axs[1, 0].plot(epochs, history['map_0.5:0.95'], 'co-', label='mAP@.50:.95')
     axs[1, 0].set_title('mAP@.50-.95 (Primary Metric)')
@@ -187,6 +201,12 @@ def train(config, model, weights_path=None, cpus=4):
     history = {
         'train_loss': [], 
         'val_loss': [], 
+        'train_box_loss': [], 
+        'val_box_loss': [], 
+        'train_cls_loss': [], 
+        'val_cls_loss': [], 
+        'train_dfl_loss': [], 
+        'val_dfl_loss': [],
         'precision': [], 
         'recall': [], 
         'f1': [], 
@@ -199,7 +219,7 @@ def train(config, model, weights_path=None, cpus=4):
     # Training Loop
     for epoch in range(config['epochs']):
         model.train()
-        train_loss = 0
+        train_loss = [0, 0, 0, 0]
         pbar_train = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']} [Training]")
         for images, targets in pbar_train:
             images = images.to(device)
@@ -210,9 +230,12 @@ def train(config, model, weights_path=None, cpus=4):
             loss, components = compute_loss(preds, targets)
             loss.backward()
             optimizer.step()
-            
-            train_loss += loss.item()
-            
+
+            train_loss[0] += loss.item()
+            train_loss[1] += components[0].item()
+            train_loss[2] += components[1].item()
+            train_loss[3] += components[2].item()
+
             pbar_train.set_postfix({
             'Loss': f"{loss.item():.4f}",
             'Box': f"{components[0]:.4f}",
@@ -221,11 +244,11 @@ def train(config, model, weights_path=None, cpus=4):
             'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
         })
         
-        avg_train_loss = train_loss / len(train_loader)
+        avg_train_loss = train_loss[0] / (2*batch_size)
         
         # Validation Loop
         model.eval()
-        val_loss = 0
+        val_loss = [0, 0, 0, 0]
 
         # Reset metrics
         stats = []
@@ -240,8 +263,11 @@ def train(config, model, weights_path=None, cpus=4):
                 
                 preds, train_out = model(images)
                 loss, components = compute_loss(train_out, targets)
-                val_loss += loss.item()
-                
+                val_loss[0] += loss.item()
+                val_loss[1] += components[0].item()
+                val_loss[2] += components[1].item()
+                val_loss[3] += components[2].item()
+
                 targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
                 lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)]  # for autolabelling
                 
@@ -290,7 +316,7 @@ def train(config, model, weights_path=None, cpus=4):
                     'VRAM': f"{torch.cuda.memory_reserved()/1E9 if torch.cuda.is_available() else 0:.2f}GB"
                 })
         
-        avg_val_loss = val_loss / len(val_loader)
+        avg_val_loss = val_loss[0] / (2*batch_size)
         
         # Compute metrics
         stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)] # Compile stats
@@ -311,6 +337,12 @@ def train(config, model, weights_path=None, cpus=4):
         # Update history
         history['train_loss'].append(avg_train_loss)
         history['val_loss'].append(avg_val_loss)
+        history['train_box_loss'].append(train_loss[1])
+        history['val_box_loss'].append(val_loss[1])
+        history['train_cls_loss'].append(train_loss[2])
+        history['val_cls_loss'].append(val_loss[2])
+        history['train_dfl_loss'].append(train_loss[3])
+        history['val_dfl_loss'].append(val_loss[3])
         history['precision'].append(mp)
         history['recall'].append(mr)
         history['f1'].append(mf1)
