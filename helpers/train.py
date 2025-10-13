@@ -363,7 +363,7 @@ def train(config, model, weights_path=None, cpus=4):
         else:
             since_improved += 1
 
-        if since_improved >= config.get('early_stopping', 20) and epoch+1 > 20:
+        if since_improved >= config.get('early_stopping', 20):
             print(f"No improvement for {since_improved} epochs. Early stopping.")
             break
     
