@@ -148,7 +148,7 @@ def train(config, model, weights_path=None, cpus=4):
         load_weights(model, weights_path)
     model.to(device)
     
-    optimizer = optim.Adam(model.parameters(), lr=config['learning_rate'])
+    optimizer = optim.AdamW(model.parameters(), lr=config['learning_rate'])
     compute_loss = ComputeLoss(model)
         
     # Training history
