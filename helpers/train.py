@@ -117,7 +117,7 @@ def train(config, model, weights_path=None, cpus=4):
         #     v2.RandomPerspective(distortion_scale=0.2, p=0.5),
         # ], p=0.5),
         v2.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.2),
-        v2.RandomErasing(scale=(0.02, 0.33), ratio=(0.3, 3.3)),
+        # v2.RandomErasing(p=.75, scale=(0.02, 0.33), ratio=(0.3, 3.3)),
         v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
         v2.Normalize(mean=mean, std=std),
     ])
@@ -143,7 +143,6 @@ def train(config, model, weights_path=None, cpus=4):
 
     # Model
     model = model(nc=nc)
-    
     if weights_path:
         load_weights(model, weights_path)
     model.to(device)
