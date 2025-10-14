@@ -6,7 +6,6 @@ import yaml
 from tqdm import tqdm
 import numpy as np
 import os
-import matplotlib.pyplot as plt
 from torchvision.transforms import v2
 
 # Add parent directory to path to allow imports from models/
@@ -17,8 +16,8 @@ from models.YOLOBase import YOLOBase
 from models.YOLOMax import YOLOMax
 from helpers.loss import ComputeLoss
 from helpers.data import YoloDataset, yolo_collate_fn
-from utils.metrics import ConfusionMatrix, ap_per_class, box_iou, non_max_suppression, output_to_target, process_batch, scale_boxes
-from utils.utils import xywh2xyxy, un_normalize_image, log_random_image_predictions
+from utils.metrics import *
+from utils.utils import *
 
 # --- Utility Functions ---
 def get_next_run_dir(base_dir='runs'):
@@ -44,56 +43,6 @@ def get_next_run_dir(base_dir='runs'):
     if not os.path.exists(os.path.join(run_dir, 'weights')):
         os.makedirs(os.path.join(run_dir, 'weights'))
     return run_dir
-
-def plot_results(history, save_path):
-    epochs = range(1, len(history['train_loss']) + 1)
-    fig, axs = plt.subplots(2, 4, figsize=(15, 10)) # Adjusted for 4 plots
-    fig.suptitle('Training and Validation Metrics')
-
-    axs[0, 0].plot(epochs, history['train_loss'], 'bo-', label='Training Loss')
-    axs[0, 0].plot(epochs, history['val_loss'], 'ro-', label='Validation Loss')
-    axs[0, 0].set_title('Total Loss')
-    axs[0, 0].legend()
-    axs[0, 0].grid(True)
-    
-    axs[0, 1].plot(epochs, history['train_box_loss'], 'bo-', label='Training Box Loss')
-    axs[0, 1].plot(epochs, history['val_box_loss'], 'ro-', label='Validation Box Loss')
-    axs[0, 1].set_title('Box Loss')
-    axs[0, 1].legend()
-    axs[0, 1].grid(True)
-
-    axs[0, 2].plot(epochs, history['train_cls_loss'], 'bo-', label='Training Cls Loss')
-    axs[0, 2].plot(epochs, history['val_cls_loss'], 'ro-', label='Validation Cls Loss')
-    axs[0, 2].set_title('Cls Loss')
-    axs[0, 2].legend()
-    axs[0, 2].grid(True)
-
-    axs[0, 3].plot(epochs, history['train_dfl_loss'], 'bo-', label='Training DFL Loss')
-    axs[0, 3].plot(epochs, history['val_dfl_loss'], 'ro-', label='Validation DFL Loss')
-    axs[0, 3].set_title('DFL Loss')
-    axs[0, 3].legend()
-    axs[0, 3].grid(True)
-    
-    axs[1, 0].plot(epochs, history['map95'], 'co-', label='mAP@.50:.95')
-    axs[1, 0].set_title('mAP@.50-.95 (Primary Metric)')
-    axs[1, 0].grid(True)
-    
-    axs[1, 1].plot(epochs, history['precision'], 'go-', label='Precision')
-    axs[1, 1].set_title('Precision')
-    axs[1, 1].grid(True)
-
-    axs[1, 2].plot(epochs, history['recall'], 'yo-', label='Recall')
-    axs[1, 2].set_title('Recall')
-    axs[1, 2].grid(True)
-
-    axs[1, 3].plot(epochs, history['f1'], 'ko-', label='F1 Score')
-    axs[1, 3].set_title('F1 Score')
-    axs[1, 3].grid(True)
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    plt.savefig(save_path)
-    plt.close()
-    print(f"Results plot saved to {save_path}")
     
 def load_weights(model, weights_path):
     """Load model weights from a .pt file."""
@@ -348,6 +297,7 @@ def train(config, model, weights_path=None, cpus=4):
 
         # Plot and save results after training is done
         plot_results(history, os.path.join(run_dir, 'results.png'))
+        save_dict_to_csv(history, os.path.join(run_dir, 'results.csv'))
         confusion_matrix.plot(save_dir=run_dir, names=list(names.values()))
 
         # Save checkpoints

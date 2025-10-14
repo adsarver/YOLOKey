@@ -11,6 +11,8 @@ from torchvision.utils import draw_bounding_boxes, save_image
 import random
 import threading
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import pandas as pd
 
 def threaded(func):
     # Multi-threads a target function and returns thread. Usage: @threaded decorator
@@ -20,6 +22,64 @@ def threaded(func):
         return thread
 
     return wrapper
+
+def save_dict_to_csv(data_dict: dict, file_path: str):
+    df = pd.DataFrame(data_dict)
+    df.to_csv(file_path, index=False)
+    
+    output_filename = 'results.csv'
+    
+    print(f"Results CSV saved to {file_path}")
+
+def plot_results(history, save_path):
+    epochs = range(1, len(history['train_loss']) + 1)
+    fig, axs = plt.subplots(2, 4, figsize=(15, 10)) # Adjusted for 4 plots
+    fig.suptitle('Training and Validation Metrics')
+
+    axs[0, 0].plot(epochs, history['train_loss'], 'bo-', label='Training Loss')
+    axs[0, 0].plot(epochs, history['val_loss'], 'ro-', label='Validation Loss')
+    axs[0, 0].set_title('Total Loss')
+    axs[0, 0].legend()
+    axs[0, 0].grid(True)
+    
+    axs[0, 1].plot(epochs, history['train_box_loss'], 'bo-', label='Training Box Loss')
+    axs[0, 1].plot(epochs, history['val_box_loss'], 'ro-', label='Validation Box Loss')
+    axs[0, 1].set_title('Box Loss')
+    axs[0, 1].legend()
+    axs[0, 1].grid(True)
+
+    axs[0, 2].plot(epochs, history['train_cls_loss'], 'bo-', label='Training Cls Loss')
+    axs[0, 2].plot(epochs, history['val_cls_loss'], 'ro-', label='Validation Cls Loss')
+    axs[0, 2].set_title('Cls Loss')
+    axs[0, 2].legend()
+    axs[0, 2].grid(True)
+
+    axs[0, 3].plot(epochs, history['train_dfl_loss'], 'bo-', label='Training DFL Loss')
+    axs[0, 3].plot(epochs, history['val_dfl_loss'], 'ro-', label='Validation DFL Loss')
+    axs[0, 3].set_title('DFL Loss')
+    axs[0, 3].legend()
+    axs[0, 3].grid(True)
+    
+    axs[1, 0].plot(epochs, history['map95'], 'co-', label='mAP@.50:.95')
+    axs[1, 0].set_title('mAP@.50-.95 (Primary Metric)')
+    axs[1, 0].grid(True)
+    
+    axs[1, 1].plot(epochs, history['precision'], 'go-', label='Precision')
+    axs[1, 1].set_title('Precision')
+    axs[1, 1].grid(True)
+
+    axs[1, 2].plot(epochs, history['recall'], 'yo-', label='Recall')
+    axs[1, 2].set_title('Recall')
+    axs[1, 2].grid(True)
+
+    axs[1, 3].plot(epochs, history['f1'], 'ko-', label='F1 Score')
+    axs[1, 3].set_title('F1 Score')
+    axs[1, 3].grid(True)
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig(save_path)
+    plt.close()
+    print(f"Results plot saved to {save_path}")
 
 def un_normalize_image(img):
     """Reverses the normalization on an image tensor."""
