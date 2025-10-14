@@ -50,22 +50,33 @@ def load_weights(model, weights_path):
         checkpoint = torch.load(weights_path, map_location='cpu', weights_only=False)
         pretrained_weights = checkpoint['model'].float().state_dict()
         custom_model_dict = model.state_dict()
+        name_map = {
+            '0': 'b0', '1': 'b1', '2': 'b2', '3': 'b3', '4': 'b4', '5': 'b5',
+            '6': 'b6', '7': 'b7', '8': 'b8', '9': 'h9', '12': 'h12', '15': 'h15',
+            '16': 'h16', '18': 'h18', '19': 'h19', '21': 'h21', '22': 'h22',
+            '25': 'h25', '28': 'h28', '29': 'detect'
+        }
         mismatch = []
         match = []
+
+        # Create a new state dict with the remapped names
         weights_to_load = {}
-        for name, param in pretrained_weights.items():
-            if name in custom_model_dict and param.shape == custom_model_dict[name].shape:
-                weights_to_load[name] = param
-                match.append(name)
+        for k, v in pretrained_weights.items():
+            # Get the module index (e.g., '0', '1', '22')
+            module_idx = k.split('.')[1]
+            
+            if module_idx in name_map:
+                # Reconstruct the key with the new custom name
+                custom_name = name_map[module_idx]
+                rest_of_key = '.'.join(k.split('.')[2:])
+                new_key = f"{custom_name}.{rest_of_key}"
+                weights_to_load[new_key] = v
+                match.append(new_key)
             else:
-                mismatch.append((name, param.shape, custom_model_dict[name].shape if name in custom_model_dict else 'Not Found'))
-                pass
-
-        if mismatch:
-            print(f"Weights loading completed with {len(match)} matches and {len(mismatch)} mismatches.")
-
+                mismatch.append(k)
+        
         model.load_state_dict(weights_to_load, strict=False)
-        print(f"Weights loaded from {weights_path}")
+        print(f"Weights loaded from {weights_path}, totale: {len(match)} matched layers, {len(mismatch)} mismatched layers.")
     else:
         print(f"No weights file found at {weights_path}, training from scratch.")
 
