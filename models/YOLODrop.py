@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from utils.model_utils import *
 
-# NOTES: compare cls loss and gap between training/val loss with and without dropout (YOLOMax vs YOLODrop)
+# Model with Dropout layers added after P3, P4, and P5 layers to reduce overfitting (specifically cls overfitting)
 
 # --- YOLOv9 Model with Dropout ---
 class YOLODrop(nn.Module):

@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from utils.model_utils import *
 
+
 # --- YOLOv9 Model with Max Pooling ---
 class YOLOMax(nn.Module):
     """

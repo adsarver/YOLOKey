@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from utils.model_utils import *
 
-# --- YOLOv9 Model with Max Pooling ---
+# --- YOLOv9 Model with P2 layer with smaller stride (smaller details)  ---
 class YOLOMax(nn.Module):
     """
     YOLOv9 model implemented in PyTorch based on 
