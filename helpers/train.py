@@ -208,7 +208,7 @@ def train(config, model, weights_path=None, cpus=4):
         'map95': [],
     }
 
-    best_val_f1 = 0.0
+    best_val_map = 0.0
     since_improved = 0
 
     # Training Loop
@@ -354,9 +354,9 @@ def train(config, model, weights_path=None, cpus=4):
         last_ckpt_path = os.path.join(run_dir, 'weights', 'last.pt')
         torch.save(model.state_dict(), last_ckpt_path)
 
-        if mf1 > best_val_f1:
+        if mean_ap > best_val_map:
             since_improved = 0
-            best_val_f1 = mf1
+            best_val_map = mean_ap
             best_ckpt_path = os.path.join(run_dir, 'weights', f'best_epoch_{epoch+1}.pt')
             torch.save(model.state_dict(), best_ckpt_path)
             print(f"New best model saved to {best_ckpt_path}")

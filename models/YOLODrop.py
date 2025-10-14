@@ -3,10 +3,10 @@ import torch
 import torch.nn as nn
 from utils.model_utils import *
 
-# NOTES: compare cls loss and gap between training/val loss with and without dropout (YOLOMax vs YOLOMaxDrop)
+# NOTES: compare cls loss and gap between training/val loss with and without dropout (YOLOMax vs YOLODrop)
 
-# --- YOLOv9 Model with Max Pooling ---
-class YOLOMax(nn.Module):
+# --- YOLOv9 Model with Dropout ---
+class YOLODrop(nn.Module):
     """
     YOLOv9 model implemented in PyTorch based on 
     https://github.com/WongKinYiu/yolov9/ YAML configuration.
@@ -21,11 +21,11 @@ class YOLOMax(nn.Module):
         self.b0 = Conv(ch, 16, 3, 2)                            # 0
         self.b1 = Conv(16, 32, 3, 2)                            # 1
         self.b2 = ELAN1(32, 32, 32, 16)                         # 2
-        self.b3 = MConv(32, 64)                                 # 3
+        self.b3 = AConv(32, 64)                                 # 3
         self.b4 = RepNCSPELAN4(64, 64, 64, 32, 3)               # 4
-        self.b5 = MConv(64, 96)                                 # 5
+        self.b5 = AConv(64, 96)                                 # 5
         self.b6 = RepNCSPELAN4(96, 96, 96, 48, 3)               # 6
-        self.b7 = MConv(96, 128)                                # 7
+        self.b7 = AConv(96, 128)                                # 7
         self.b8 = RepNCSPELAN4(128, 128, 128, 64, 3)            # 8
 
         # --- Head ---
@@ -36,12 +36,15 @@ class YOLOMax(nn.Module):
         self.h13 = nn.Upsample(scale_factor=2, mode='nearest')  # 13
         self.h14 = Concat(1)                                    # 14
         self.h15 = RepNCSPELAN4(160, 64, 64, 32, 3)             # 15 (P3 for detection)
-        self.h16 = MConv(64, 48)                                # 16
+        self.d_p3 = nn.Dropout(p=0.2)                           # Dropout -- adding dropout layer after p3
+        self.h16 = AConv(64, 48)                                # 16
         self.h17 = Concat(1)                                    # 17
         self.h18 = RepNCSPELAN4(144, 96, 96, 48, 3)             # 18 (P4/16 for detection)
-        self.h19 = MConv(96, 64)                                # 19
+        self.d_p4 = nn.Dropout(p=0.2)                           # Dropout -- adding dropout layer after p4
+        self.h19 = AConv(96, 64)                                # 19
         self.h20 = Concat(1)                                    # 20
         self.h21 = RepNCSPELAN4(192, 128, 128, 64, 3)           # 21 (P5/32 for detection)
+        self.d_p5 = nn.Dropout(p=0.2)                           # Dropout -- adding dropout layer after p5
         self.h22 = SPPELAN(128, 128, 64)                        # 22
         self.h23 = nn.Upsample(scale_factor=2, mode='nearest')  # 23
         self.h24 = Concat(1)                                    # 24
@@ -62,7 +65,8 @@ class YOLOMax(nn.Module):
         self.model = nn.ModuleList([
             self.b0, self.b1, self.b2, self.b3, self.b4, self.b5, self.b6, self.b7, self.b8, self.h9, # 0-9
             self.h10, self.h11, self.h12, self.h13, self.h14, self.h15, self.h16, self.h17, self.h18, self.h19, # 10-19
-            self.h20, self.h21, self.h22, self.h23, self.h24, self.h25, self.h26, self.h27, self.h28, self.detect #20-29
+            self.h20, self.h21, self.h22, self.h23, self.h24, self.h25, self.h26, self.h27, self.h28, #20-28 + dropout layers
+            self.d_p3, self.d_p4, self.d_p5, self.detect
         ])
 
     def forward(self, x):
@@ -83,12 +87,15 @@ class YOLOMax(nn.Module):
         x13 = self.h13(x12) # 13
         x14 = self.h14([x13, x4]) # 14
         x15 = self.h15(x14) # 15 (P3 for detection)
+        x15 = self.d_p3(x15) # Dropout after P3
         x16 = self.h16(x15) # 16
         x17 = self.h17([x16, x12]) # 17
         x18 = self.h18(x17) # 18 (P4/16 for detection)
+        x18 = self.d_p4(x18) # Dropout after P4
         x19 = self.h19(x18) # 19
         x20 = self.h20([x19, x9]) # 20
         x21 = self.h21(x20) # 21 (P5/32 for detection)
+        x21 = self.d_p5(x21) # Dropout after P5
         x22 = self.h22(x21) # 22
         x23 = self.h23(x22) # 23
         x24 = self.h24([x23, x6]) # 24
