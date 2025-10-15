@@ -4,7 +4,7 @@ import torch.nn as nn
 from utils.model_utils import *
 
 # --- YOLOv9 Model with P2 layer with smaller stride (smaller details)  ---
-class YOLOMax(nn.Module):
+class YOLOP2(nn.Module):
     """
     YOLOv9 model implemented in PyTorch based on 
     https://github.com/WongKinYiu/yolov9/ YAML configuration.
