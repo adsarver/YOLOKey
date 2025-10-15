@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from utils.model_utils import *
 
-# --- YOLOv9 Model with P2 layer with smaller stride (smaller details)  ---
-class YOLOMax(nn.Module):
+# --- YOLOv9 Model with P2 layer with smaller stride (finer details)  ---
+class YOLOP2(nn.Module):
     """
     YOLOv9 model implemented in PyTorch based on 
     https://github.com/WongKinYiu/yolov9/ YAML configuration.
@@ -18,37 +18,48 @@ class YOLOMax(nn.Module):
         # --- Backbone ---
         self.b0 = Conv(ch, 16, 3, 2)                            # 0
         self.b1 = Conv(16, 32, 3, 2)                            # 1
-        self.b2 = ELAN1(32, 32, 32, 16)                         # 2
+        self.b2 = ELAN1(32, 32, 32, 16)                         # 2 --- P2 Features (stride 4)
         self.b3 = MConv(32, 64)                                 # 3
-        self.b4 = RepNCSPELAN4(64, 64, 64, 32, 3)               # 4
+        self.b4 = RepNCSPELAN4(64, 64, 64, 32, 3)               # 4 --- P3 Features (stride 8)
         self.b5 = MConv(64, 96)                                 # 5
-        self.b6 = RepNCSPELAN4(96, 96, 96, 48, 3)               # 6
+        self.b6 = RepNCSPELAN4(96, 96, 96, 48, 3)               # 6 --- P4 Features (stride 16)
         self.b7 = MConv(96, 128)                                # 7
-        self.b8 = RepNCSPELAN4(128, 128, 128, 64, 3)            # 8
+        self.b8 = RepNCSPELAN4(128, 128, 128, 64, 3)            # 8 --- P5 Features (stride 32)
 
         # --- Head ---
+        # --- Top Down --- P5/32 -> P4/16 -> P3/8 -> P2/4 - Creates "semantically mature" P3 and P2 ---
         self.h9 = SPPELAN(128, 128, 64)                         # 9
         self.h10 = nn.Upsample(scale_factor=2, mode='nearest')  # 10
         self.h11 = Concat(1)                                    # 11
-        self.h12 = RepNCSPELAN4(224, 96, 96, 48, 3)             # 12
+        self.h12 = RepNCSPELAN4(224, 96, 96, 48, 3)             # 12 --- Enhanced P4 Features
         self.h13 = nn.Upsample(scale_factor=2, mode='nearest')  # 13
         self.h14 = Concat(1)                                    # 14
-        self.h15 = RepNCSPELAN4(160, 64, 64, 32, 3)             # 15 (P3 for detection)
+        self.h15 = RepNCSPELAN4(160, 64, 64, 32, 3)             # 15 --- Enhanced/Final P3/8 Features for detection
+        self.p2up = nn.Upsample(scale_factor=2, mode='nearest') # P2
+        self.p2conc = Concat(1)                                 # P2      
+        self.p2proc = RepNCSPELAN4(96, 32, 32, 16, 3)           # P2 --- Enhanced/Final P2/4 Features for detection
+
+        # --- Bottom Up --- P3/8 -> P4/16 -> P5/32 - Creates "semantically rich" P4 and P5 - Starts at P3 for computational benefits ---
         self.h16 = MConv(64, 48)                                # 16
         self.h17 = Concat(1)                                    # 17
-        self.h18 = RepNCSPELAN4(144, 96, 96, 48, 3)             # 18 (P4/16 for detection)
+        self.h18 = RepNCSPELAN4(144, 96, 96, 48, 3)             # 18 --- Final P4/16 for detection
         self.h19 = MConv(96, 64)                                # 19
         self.h20 = Concat(1)                                    # 20
-        self.h21 = RepNCSPELAN4(192, 128, 128, 64, 3)           # 21 (P5/32 for detection)
-        self.h22 = SPPELAN(128, 128, 64)                        # 22
+        self.h21 = RepNCSPELAN4(192, 128, 128, 64, 3)           # 21 --- Final P5/32 for detection
+        
+        # --- Auxiliary Layers ---
+        self.h22 = SPPELAN(128, 128, 64)                        # 22 --- Auxiliary P5
         self.h23 = nn.Upsample(scale_factor=2, mode='nearest')  # 23
         self.h24 = Concat(1)                                    # 24
-        self.h25 = RepNCSPELAN4(224, 96, 96, 48, 3)             # 25
+        self.h25 = RepNCSPELAN4(224, 96, 96, 48, 3)             # 25 --- Auxiliary P4
         self.h26 = nn.Upsample(scale_factor=2, mode='nearest')  # 26
         self.h27 = Concat(1)                                    # 27
-        self.h28 = RepNCSPELAN4(160, 64, 64, 32, 3)             # 28
+        self.h28 = RepNCSPELAN4(160, 64, 64, 32, 3)             # 28 --- Auxiliary P3
+        self.ap2up = nn.Upsample(scale_factor=2, mode='nearest') # P2
+        self.ap2conc = Concat(1)                                 # P2
+        self.ap2proc = RepNCSPELAN4(96, 32, 32, 16, 3)           # P2 --- Auxiliary P2
 
-        ch_detect = [64, 96, 128, 64, 96, 128]
+        ch_detect = [32, 64, 96, 128, 32, 64, 96, 128]
         self.detect = DualDDetect(nc, ch=ch_detect)             # 29
         
         s = 256  # 2x min stride
@@ -81,6 +92,9 @@ class YOLOMax(nn.Module):
         x13 = self.h13(x12) # 13
         x14 = self.h14([x13, x4]) # 14
         x15 = self.h15(x14) # 15 (P3 for detection)
+        xp2_up = self.p2up(x15)
+        xp2_cat = self.p2conc([xp2_up, x2])
+        xp2_out = self.p2proc(xp2_cat) # P2 for detection
         x16 = self.h16(x15) # 16
         x17 = self.h17([x16, x12]) # 17
         x18 = self.h18(x17) # 18 (P4/16 for detection)
@@ -94,6 +108,9 @@ class YOLOMax(nn.Module):
         x26 = self.h26(x25) # 26
         x27 = self.h27([x26, x4]) # 27
         x28 = self.h28(x27) # 28
-        
-        return self.detect([x28, x25, x22, x15, x18, x21]) # 38 (P3, P4, P5 for detection)
+        xap2_up = self.ap2up(x28)
+        xap2_cat = self.ap2conc([xap2_up, x2])
+        xap2_out = self.ap2proc(xap2_cat)
+
+        return self.detect([xap2_out, x28, x25, x22, xp2_out, x15, x18, x21]) # 38 (P2, P3, P4, P5 for detection)
         

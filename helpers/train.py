@@ -14,6 +14,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from models.YOLOBase import YOLOBase
 from models.YOLOMax import YOLOMax
+from models.YOLOP2 import YOLOP2
 from helpers.loss import ComputeLoss
 from helpers.data import YoloDataset, yolo_collate_fn
 from utils.metrics import *
@@ -202,9 +203,9 @@ def train(config, model, weights_path=None, cpus=4):
         
         # Validation Loop
         model.eval()
-        val_loss = [0, 0, 0, 0]
 
         # Reset metrics
+        val_loss = [0, 0, 0, 0]
         stats = []
         confusion_matrix = ConfusionMatrix(nc=nc)
         
@@ -334,7 +335,8 @@ if __name__ == '__main__':
         'img_size': 640,
         'batch_size': 16,
         'epochs': 500,
-        'learning_rate': 0.001
+        'learning_rate': 0.001,
+        'early_stopping': 10
     }
-    train(config, YOLOMax, 'yolov9-t-converted.pt')
+    train(config, YOLOP2, 'yolov9-t-converted.pt')
 
