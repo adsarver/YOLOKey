@@ -1,0 +1,145 @@
+import matplotlib.pyplot as plt
+import cv2
+import os
+import torch
+from torchvision.transforms import v2
+import torch.nn.functional as F
+import torch.nn as nn
+from utils.model_utils import *
+from utils.utils import *
+from utils.metrics import non_max_suppression
+from models.YOLOBase import YOLOBase
+from models.YOLOMax import YOLOMax
+from models.YOLODrop import YOLODrop
+from models.YOLOCBAM import YOLOCBAM
+from models.YOLOP2 import YOLOP2
+from models.YOLOHD import YOLOHD
+
+FILE_OUTPUT = 'output/'
+class_names = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'Backspace', 'C', 'Comma', 'D', 'DOT', 'E', 'ENTER', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'MINUS', 'N', 'O', 'P', 'PLUS', 'Q', 'R', 'S', 'SPACE', 'T', 'TAB', 'U', 'V', 'W', 'X', 'Y', 'Z', 'accent', 'keyboard']
+
+def create_directory():
+    os.makedirs(FILE_OUTPUT, exist_ok=True)
+    
+    for folder in os.listdir(FILE_OUTPUT):
+        folder_path = os.path.join(FILE_OUTPUT, folder)
+        # Get index of last run
+        if folder.startswith('output') and os.path.isdir(folder_path):
+            try:
+                run_index = int(folder.split('output')[-1])
+                if run_index >= new_run_index:
+                    new_run_index = run_index + 1
+
+            except ValueError:
+                continue
+
+    os.makedirs(f'{FILE_OUTPUT}output{new_run_index}', exist_ok=True)
+    
+
+def save_image(image, name):
+    cv2.imwrite(f'{name}.jpg', image)
+
+def show_plot(data, metric_name):
+    for name, df in data.items():
+        plt.plot(df[metric_name], label=name + metric_name)
+    plt.xlabel('Epochs')
+    plt.ylabel(metric_name)
+    plt.legend()
+    plt.show()
+
+
+def import_data(file_path):
+    data = {}
+    models = {
+        'YOLOBase': YOLOBase,
+        'YOLOMax': YOLOMax,
+        'YOLODrop': YOLODrop,
+        'YOLOCBAM': YOLOCBAM,
+        'YOLOP2': YOLOP2,
+        'YOLOHD': YOLOHD
+    }
+    
+    for folder in os.listdir(file_path):
+        folder_path = os.path.join(file_path, folder, 'results.csv')
+        df = pd.read_csv(folder_path, sep=",")
+        data[folder] = df
+                    
+        for model_file in os.listdir(os.path.join(file_path, folder, 'weights')):
+            max_epoch = 0
+            model_path = ''
+            current_epoch = int(model_file.split('_')[-1].split('.')[0])
+            if model_file.startswith('best_epoch') and current_epoch >= max_epoch:
+                max_epoch = current_epoch
+                model_path = os.path.join(file_path, folder, 'weights', model_file)
+            
+            if folder in models and isinstance(models[folder], nn.Module):
+                model_class = models[folder]
+                model_instance = model_class()
+                state_dict = torch.load(model_path)
+                model_instance.load_state_dict(state_dict)
+                models[folder] = model_instance
+            
+    return data, models
+
+
+def run_detect(model, image_path, device='cuda', scale_factor=3.0):
+    font = None
+    import matplotlib.font_manager as fm
+    for font in fm.findSystemFonts(fontpaths=['/usr/share/fonts/truetype/']):
+        if 'Serif-Regular' in font:
+            font = font
+            break
+        
+    model.to(device)
+    model.eval()
+    img = cv2.imread(image_path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+    
+    transforms = v2.Compose([ 
+        v2.ToImage(),
+        v2.ToDtype(torch.float32, scale=True),  # Normalize expects float input
+        v2.Normalize(mean=mean, std=std),
+    ])
+    
+    img = transforms(img)
+    img_h, img_w = img.shape[1:]
+    
+    with torch.no_grad():
+        pred = model(img)[0]
+        pred = non_max_suppression(pred, 0.75, 0.45)
+    
+    high_res_img = F.interpolate(
+        img.unsqueeze(0).float(),
+        size=(img_h * scale_factor, img_w * scale_factor),
+        mode='bilinear', 
+        align_corners=False
+    ).squeeze(0).to(torch.uint8)
+    
+    # Convert image tensor to uint8 for drawing
+    img_h, img_w = high_res_img.shape[1:]
+
+    # --- Get and Format Predicted Boxes (Blue) ---
+    preds_for_img = pred
+    conf = preds_for_img[:, 4]
+    labels_idx = preds_for_img[:, 5]
+    
+    pred_boxes = preds_for_img[:, :4] * scale_factor
+    pred_scores = conf
+    pred_labels_idx = labels_idx
+    pred_labels = [f"{class_names[int(l)]} {s:.2f}" for l, s in zip(pred_labels_idx, pred_scores)]
+
+    if pred_boxes.shape[0] > 0:
+        img_to_draw = draw_bounding_boxes(
+            high_res_img, 
+            boxes=pred_boxes, 
+            labels=pred_labels, 
+            colors="green", 
+            width=2*scale_factor, 
+            font_size=10*scale_factor, 
+            font=font
+        )
+
+    return img_to_draw

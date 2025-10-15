@@ -5,7 +5,7 @@ from utils.model_utils import *
 
 
 # --- YOLOv9 Model with Max Pooling ---
-class YOLOMax(nn.Module):
+class YOLOCBAM(nn.Module):
     """
     YOLOv9 model implemented in PyTorch based on 
     https://github.com/WongKinYiu/yolov9/ YAML configuration.
