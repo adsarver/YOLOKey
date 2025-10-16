@@ -4,3 +4,6 @@ dataset*/
 runs/*
 outputs/
 YOLOKey/
+*.jpg
+*.jpeg
+*.png

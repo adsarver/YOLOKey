@@ -27,7 +27,7 @@ class YoloDataset(Dataset):
 
         # Find all image files and filter out any that don't have corresponding labels
         self.image_files = sorted(glob(os.path.join(self.img_dir, '*.*')))
-        self.image_files = [img for img in self.image_files if os.path.exists(self._get_label_path(img))]
+        self.image_files = [img for img in self.image_files if os.path.exists(self._get_label_path(img))][:200]
         invalid = []
 
         for img in self.image_files:
